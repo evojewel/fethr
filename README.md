@@ -2,7 +2,9 @@
 
 **A featherweight code editor with first-class agent integration.**
 
-> Status: **alpha.** A working basic editor: file tree, syntax highlighting, edit and save.
+> Status: **alpha.** A working editor with an agent panel: file tree, syntax highlighting,
+> edit and save — plus a Claude-powered agent that reads your workspace and proposes edits
+> you accept or reject.
 
 ```bash
 npx @evojewel/fethr@alpha .     # open the current directory in the editor
@@ -34,9 +36,23 @@ Principles, subject to change while we build:
 ```bash
 fethr           # open the current directory
 fethr <dir>     # open a specific directory
+fethr --app     # chromeless app-mode window (via Chrome/Edge when installed)
 ```
 
-⌘S saves. That's the manual.
+⌘S saves. ⌘J toggles the agent panel. That's the manual.
+
+## The agent panel
+
+The agent is a peer process, not a plugin — fethr's founding thesis. Press ⌘J, ask
+anything about the project; the current file and selection travel as context automatically.
+
+- Runs on the **Claude Agent SDK** using your existing [Claude Code](https://claude.com/claude-code)
+  login — no API key to configure. (No Claude Code auth on the machine → the panel tells you.)
+- **Read-only by construction:** the agent can Read/Grep/Glob inside your workspace and
+  nothing else — every mutating tool is disabled server-side.
+- **Edits arrive as proposals.** The agent's only change mechanism is `propose_edit`; you
+  see a diff card, and Accept applies it *in the editor* where ⌘Z works and ⌘S saves.
+  The agent process never touches your disk.
 
 (The unscoped npm name `fethr` is blocked by npm's typosquat filter — "too similar to
 `fetch`" — so the package lives under the author scope. The installed command is still

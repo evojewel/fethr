@@ -16,11 +16,16 @@
 
 ## Status
 
-Alpha. `npx @evojewel/fethr@alpha .` opens a working basic editor: a local server bound
-to 127.0.0.1 with the OS browser as the shell, CodeMirror 6 core, file tree, syntax
-highlighting (JS/TS, Python, Markdown, HTML, CSS, JSON), edit and save. ~650 KB, no
-Electron. File access is confined to the launch directory; nothing leaves the machine.
-Agent integration is the next milestone.
+Alpha. `npx @evojewel/fethr@alpha .` opens a working editor with an agent panel: a local
+server bound to 127.0.0.1 with the OS browser as the shell, CodeMirror 6 core, file tree,
+syntax highlighting (JS/TS, Python, Markdown, HTML, CSS, JSON), edit and save. No Electron.
+File access is confined to the launch directory.
+
+The agent panel (Cmd-J) runs on the Claude Agent SDK using the machine's existing Claude
+Code login. It is read-only by construction (Read/Grep/Glob only; all mutating tools
+disabled); its sole change mechanism is a propose_edit tool whose proposals render as diff
+cards the writer accepts or rejects — accepted edits apply in the editor, never directly
+to disk.
 
 ## Links
 

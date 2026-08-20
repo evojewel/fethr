@@ -108,4 +108,184 @@ window.addEventListener("beforeunload", (e) => {
   if (dirty) e.preventDefault();
 });
 
+// ---------- agent panel ----------
+
+let agentSession = null;
+let streaming = false;
+
+const chatEl = $("#chat");
+const inputEl = $("#input");
+
+const toggleAgent = () => {
+  document.body.classList.toggle("agent-open");
+  if (document.body.classList.contains("agent-open")) inputEl.focus();
+};
+$("#toggle-agent").onclick = toggleAgent;
+window.addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key === "j") {
+    e.preventDefault();
+    toggleAgent();
+  }
+});
+
+function addMsg(cls, who, text) {
+  const d = document.createElement("div");
+  d.className = "msg " + cls;
+  if (who) {
+    const w = document.createElement("span");
+    w.className = "who";
+    w.textContent = who;
+    d.appendChild(w);
+  }
+  d.appendChild(document.createTextNode(text));
+  chatEl.appendChild(d);
+  chatEl.scrollTop = chatEl.scrollHeight;
+  return d;
+}
+
+// Minimal line diff (LCS) for proposal preview.
+function lineDiff(a, b) {
+  const A = a.split("\n"), B = b.split("\n");
+  const m = A.length, n = B.length;
+  if (m * n > 400000) return null; // too big to diff cheaply — show summary only
+  const L = Array.from({ length: m + 1 }, () => new Uint16Array(n + 1));
+  for (let i = m - 1; i >= 0; i--)
+    for (let j = n - 1; j >= 0; j--)
+      L[i][j] = A[i] === B[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  const out = [];
+  let i = 0, j = 0;
+  while (i < m && j < n) {
+    if (A[i] === B[j]) { out.push(["=", A[i]]); i++; j++; }
+    else if (L[i + 1][j] >= L[i][j + 1]) { out.push(["-", A[i]]); i++; }
+    else { out.push(["+", B[j]]); j++; }
+  }
+  while (i < m) out.push(["-", A[i++]]);
+  while (j < n) out.push(["+", B[j++]]);
+  return out;
+}
+
+function renderProposal(p) {
+  const box = document.createElement("div");
+  box.className = "proposal";
+  const head = document.createElement("div");
+  head.className = "phead";
+  head.innerHTML = `<b>propose_edit</b> ${p.path}${p.note ? " — " + p.note : ""}`;
+  box.appendChild(head);
+
+  const pre = document.createElement("pre");
+  const oldContent = p.path === current ? view.state.doc.toString() : null;
+  if (oldContent !== null) {
+    const diff = lineDiff(oldContent, p.content);
+    if (diff) {
+      for (const [op, line] of diff) {
+        if (op === "=") continue;
+        const s = document.createElement("span");
+        s.className = op === "+" ? "add" : "del";
+        s.textContent = (op === "+" ? "+ " : "- ") + line + "\n";
+        pre.appendChild(s);
+      }
+      if (!pre.childNodes.length) pre.textContent = "(no changes)";
+    } else {
+      pre.textContent = p.content.slice(0, 4000);
+    }
+  } else {
+    pre.textContent = p.content.slice(0, 4000);
+  }
+  box.appendChild(pre);
+
+  const actions = document.createElement("div");
+  actions.className = "pactions";
+  const accept = document.createElement("button");
+  accept.className = "accept";
+  accept.textContent = "Accept";
+  const reject = document.createElement("button");
+  reject.textContent = "Reject";
+  const done = (label) => {
+    actions.textContent = label;
+  };
+  accept.onclick = async () => {
+    if (p.path !== current) await openFile(p.path);
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: p.content } });
+    markDirty(true);
+    done("accepted — review and ⌘S to save");
+  };
+  reject.onclick = () => done("rejected");
+  actions.append(accept, reject);
+  box.appendChild(actions);
+  chatEl.appendChild(box);
+  chatEl.scrollTop = chatEl.scrollHeight;
+}
+
+async function askAgent(prompt) {
+  streaming = true;
+  addMsg("user", "you", prompt);
+  const reply = addMsg("assistant", "agent", "");
+
+  const context = current
+    ? {
+        path: current,
+        content: view.state.doc.length < 100000 ? view.state.doc.toString() : "",
+        selection: view.state.sliceDoc(
+          view.state.selection.main.from,
+          view.state.selection.main.to
+        ) || undefined,
+      }
+    : undefined;
+
+  try {
+    const r = await fetch("/api/agent", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt, sessionId: agentSession, context }),
+    });
+    if (!r.ok || !r.body) {
+      const err = await r.json().catch(() => ({}));
+      reply.appendChild(document.createTextNode(err.error || `agent error (${r.status})`));
+      return;
+    }
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf("\n\n")) >= 0) {
+        const chunk = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        if (!chunk.startsWith("data: ")) continue;
+        const ev = JSON.parse(chunk.slice(6));
+        if (ev.type === "session") agentSession = ev.id;
+        else if (ev.type === "delta") {
+          reply.appendChild(document.createTextNode(ev.text));
+          chatEl.scrollTop = chatEl.scrollHeight;
+        } else if (ev.type === "tool") addMsg("tool", null, `⚙ ${ev.name}`);
+        else if (ev.type === "proposal") renderProposal(ev);
+        else if (ev.type === "error") addMsg("tool", null, `error: ${ev.message}`);
+        else if (ev.type === "done" && !ev.ok) addMsg("tool", null, `ended: ${ev.error}`);
+      }
+    }
+  } catch (e) {
+    addMsg("tool", null, `agent unreachable: ${e.message}`);
+  } finally {
+    streaming = false;
+  }
+}
+
+inputEl.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    const t = inputEl.value.trim();
+    if (t && !streaming) {
+      inputEl.value = "";
+      askAgent(t);
+    }
+  }
+});
+
+// Heartbeat — lets the server exit when the window closes.
+setInterval(() => fetch("/api/alive", { method: "POST" }).catch(() => {}), 5000);
+fetch("/api/alive", { method: "POST" }).catch(() => {});
+
 boot();

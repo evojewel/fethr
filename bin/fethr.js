@@ -22,6 +22,9 @@ if (arg === "--version" || arg === "-v") {
   https://fethr.dev · https://github.com/evojewel/fethr
 `);
 } else {
+  const args = process.argv.slice(2);
+  const app = args.includes("--app");
+  const dir = args.find((a) => !a.startsWith("--"));
   const { serve } = await import("../src/server.js");
-  serve(arg || process.cwd());
+  serve(dir || process.cwd(), undefined, { app });
 }

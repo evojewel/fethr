@@ -1,10 +1,10 @@
 {
   "name": "@evojewel/fethr",
-  "version": "0.1.0-alpha",
+  "version": "0.4.0-alpha",
   "publishConfig": {
     "access": "public"
   },
-  "description": "A featherweight code editor: local server + your browser as the shell, CodeMirror core, zero Electron. Agent integration coming.",
+  "description": "A featherweight code editor with a first-class agent panel. Local server + your browser as the shell, CodeMirror core, Claude-powered agent that proposes \u2014 never writes. No Electron.",
   "keywords": [
     "editor",
     "lightweight",
@@ -34,6 +34,7 @@
     "node": ">=18"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.238",
     "@codemirror/commands": "^6.11.0",
     "@codemirror/lang-css": "^6.3.1",
     "@codemirror/lang-html": "^6.4.12",
@@ -44,7 +45,8 @@
     "@codemirror/state": "^6.7.1",
     "@codemirror/theme-one-dark": "^6.1.3",
     "@codemirror/view": "^6.43.9",
-    "codemirror": "^6.0.2"
+    "codemirror": "^6.0.2",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "esbuild": "^0.28.2"

@@ -52,8 +52,16 @@ function send(res, code, body, type = "application/json") {
   res.end(body);
 }
 
-export function serve(root, onReady) {
+export function serve(root, onReady, opts = {}) {
   root = path.resolve(root);
+  let lastPing = null;
+
+  // Exit when the editor window has been gone for a while (only once it
+  // has pinged at least once, so headless/API use is unaffected).
+  const reaper = setInterval(() => {
+    if (lastPing && Date.now() - lastPing > 30_000) process.exit(0);
+  }, 5_000);
+  reaper.unref();
 
   const server = http.createServer((req, res) => {
     const u = new URL(req.url, "http://localhost");
@@ -69,6 +77,17 @@ export function serve(root, onReady) {
     }
     if (req.method === "GET" && u.pathname === "/api/tree") {
       return send(res, 200, JSON.stringify(listTree(root)));
+    }
+    if (req.method === "POST" && u.pathname === "/api/agent") {
+      import("./agent.js").then(
+        (m) => m.handleAgent(root, req, res),
+        (e) => send(res, 500, JSON.stringify({ error: "agent unavailable: " + (e.message || e) }))
+      );
+      return;
+    }
+    if (req.method === "POST" && u.pathname === "/api/alive") {
+      lastPing = Date.now();
+      return send(res, 200, "{}");
     }
     if (u.pathname === "/api/file") {
       const p = safeJoin(root, u.searchParams.get("p") || "");
@@ -110,8 +129,15 @@ export function serve(root, onReady) {
     if (onReady) onReady(urlStr);
     else {
       console.log(`\n  fethr — editing ${root}\n  ${urlStr}\n`);
-      const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
-      execFile(opener, [urlStr], () => {});
+      if (opts.app && process.platform === "darwin") {
+        // Chromeless app-mode window via Chrome/Edge when available.
+        execFile("open", ["-na", "Google Chrome", "--args", `--app=${urlStr}`], (err) => {
+          if (err) execFile("open", [urlStr], () => {});
+        });
+      } else {
+        const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
+        execFile(opener, [urlStr], () => {});
+      }
     }
   });
 

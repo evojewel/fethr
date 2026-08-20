@@ -1,0 +1,21 @@
+{
+  "name": "fethr",
+  "version": "0.0.1",
+  "description": "A featherweight code editor with first-class agent integration. Under construction.",
+  "keywords": ["editor", "lightweight", "agent", "claude-code"],
+  "homepage": "https://github.com/evojewel/fethr",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/evojewel/fethr.git"
+  },
+  "license": "MIT",
+  "author": "Jewel Lukose",
+  "type": "module",
+  "bin": {
+    "fethr": "bin/fethr.js"
+  },
+  "files": ["bin", "README.md", "LICENSE"],
+  "engines": {
+    "node": ">=18"
+  }
+}

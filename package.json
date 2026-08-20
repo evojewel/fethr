@@ -15,7 +15,7 @@
   "bin": {
     "fethr": "bin/fethr.js"
   },
-  "files": ["bin", "README.md", "LICENSE"],
+  "files": ["bin", "package.json", "README.md", "LICENSE"],
   "engines": {
     "node": ">=18"
   }

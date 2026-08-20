@@ -7,19 +7,21 @@ import { createRequire } from "node:module";
 
 const { version } = createRequire(import.meta.url)("../package.json");
 
-const banner = `
-  fethr ${version}
-
-  A featherweight code editor with first-class agent integration.
-  Under construction — nothing to run yet.
-
-  Watch: https://fethr.dev · https://github.com/evojewel/fethr
-`;
-
 const arg = process.argv[2];
 
 if (arg === "--version" || arg === "-v") {
   console.log(`fethr ${version}`);
+} else if (arg === "--help" || arg === "-h") {
+  console.log(`
+  fethr ${version} — a featherweight code editor
+
+  USAGE
+    fethr [dir]     open dir (default: current directory) in the editor
+    fethr --version
+
+  https://fethr.dev · https://github.com/evojewel/fethr
+`);
 } else {
-  console.log(banner);
+  const { serve } = await import("../src/server.js");
+  serve(arg || process.cwd());
 }

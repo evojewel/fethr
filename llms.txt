@@ -16,8 +16,11 @@
 
 ## Status
 
-Pre-alpha. The npm package (`npx fethr`) is a placeholder CLI; there is no
-editor to run yet.
+Alpha. `npx @evojewel/fethr@alpha .` opens a working basic editor: a local server bound
+to 127.0.0.1 with the OS browser as the shell, CodeMirror 6 core, file tree, syntax
+highlighting (JS/TS, Python, Markdown, HTML, CSS, JSON), edit and save. ~650 KB, no
+Electron. File access is confined to the launch directory; nothing leaves the machine.
+Agent integration is the next milestone.
 
 ## Links
 

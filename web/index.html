@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>fethr</title>
+<style>
+  :root {
+    --bg: #101312; --panel: #161a18; --ink: #e8ece9; --muted: #8fa098;
+    --accent: #6fd3b2; --rule: #242a27;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; height: 100vh; display: grid;
+    grid-template-columns: 220px 1fr; grid-template-rows: 1fr 28px;
+    background: var(--bg); color: var(--ink);
+    font-family: -apple-system, system-ui, sans-serif; font-size: 13px;
+    overflow: hidden;
+  }
+  aside {
+    grid-row: 1 / 3; border-right: 1px solid var(--rule); background: var(--panel);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  aside h1 {
+    font-size: 13px; font-weight: 600; margin: 0; padding: 10px 12px;
+    color: var(--accent); border-bottom: 1px solid var(--rule);
+  }
+  aside h1 small { color: var(--muted); font-weight: 400; margin-left: 6px; }
+  #tree { overflow-y: auto; flex: 1; padding: 6px 0; }
+  #tree div { padding: 2px 8px; cursor: default; white-space: nowrap; color: var(--muted); }
+  #tree .file { cursor: pointer; color: var(--ink); }
+  #tree .file:hover { background: var(--rule); }
+  #tree .active { background: var(--rule); color: var(--accent); }
+  #editor { overflow: hidden; }
+  #editor .cm-editor { height: 100%; font-size: 13px; }
+  #editor .cm-scroller { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  footer {
+    display: flex; align-items: center; gap: 16px; padding: 0 12px;
+    border-top: 1px solid var(--rule); background: var(--panel);
+    color: var(--muted); font-size: 12px;
+  }
+  #file { color: var(--ink); }
+  #status { color: var(--accent); }
+  footer .hint { margin-left: auto; }
+</style>
+</head>
+<body>
+<aside>
+  <h1>fethr<small id="root"></small></h1>
+  <div id="tree"></div>
+</aside>
+<div id="editor"></div>
+<footer>
+  <span id="file">no file open</span>
+  <span id="status"></span>
+  <span class="hint">⌘S saves</span>
+</footer>
+<script type="module" src="/editor.js"></script>
+</body>
+</html>

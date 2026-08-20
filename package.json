@@ -1,10 +1,10 @@
 {
   "name": "@evojewel/fethr",
-  "version": "0.0.2-alpha",
+  "version": "0.1.0-alpha",
   "publishConfig": {
     "access": "public"
   },
-  "description": "A featherweight code editor with first-class agent integration. Under construction.",
+  "description": "A featherweight code editor: local server + your browser as the shell, CodeMirror core, zero Electron. Agent integration coming.",
   "keywords": [
     "editor",
     "lightweight",
@@ -24,11 +24,33 @@
   },
   "files": [
     "bin",
+    "src",
+    "dist",
     "package.json",
     "README.md",
     "LICENSE"
   ],
   "engines": {
     "node": ">=18"
+  },
+  "dependencies": {
+    "@codemirror/commands": "^6.11.0",
+    "@codemirror/lang-css": "^6.3.1",
+    "@codemirror/lang-html": "^6.4.12",
+    "@codemirror/lang-javascript": "^6.2.5",
+    "@codemirror/lang-json": "^6.0.2",
+    "@codemirror/lang-markdown": "^6.5.2",
+    "@codemirror/lang-python": "^6.2.1",
+    "@codemirror/state": "^6.7.1",
+    "@codemirror/theme-one-dark": "^6.1.3",
+    "@codemirror/view": "^6.43.9",
+    "codemirror": "^6.0.2"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  },
+  "scripts": {
+    "build": "esbuild web/editor.js --bundle --format=esm --minify --outfile=dist/editor.js && cp web/index.html dist/index.html",
+    "prepublishOnly": "npm run build"
   }
 }

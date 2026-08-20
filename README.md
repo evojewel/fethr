@@ -2,8 +2,16 @@
 
 **A featherweight code editor with first-class agent integration.**
 
-> Status: **pre-alpha, under construction.** This package currently reserves the name and
-> ships a placeholder CLI. There is no editor to run yet.
+> Status: **alpha.** A working basic editor: file tree, syntax highlighting, edit and save.
+
+```bash
+npx @evojewel/fethr@alpha .     # open the current directory in the editor
+```
+
+fethr starts a local server bound to 127.0.0.1 and opens your browser — the rendering
+engine your OS already ships — as the shell. No Electron, no app download. The editor core
+is CodeMirror 6 (JS/TS, Python, Markdown, HTML, CSS, JSON highlighting), ~650 KB total.
+File access is confined to the directory you launch with; nothing leaves your machine.
 
 ## The idea
 
@@ -21,11 +29,14 @@ Principles, subject to change while we build:
 - **No extension platform.** Language smarts via LSP, syntax via tree-sitter, agent via its
   own protocol. The moat we skip is the weight we skip.
 
-## Try the placeholder
+## Usage
 
 ```bash
-npx @evojewel/fethr
+fethr           # open the current directory
+fethr <dir>     # open a specific directory
 ```
+
+⌘S saves. That's the manual.
 
 (The unscoped npm name `fethr` is blocked by npm's typosquat filter — "too similar to
 `fetch`" — so the package lives under the author scope. The installed command is still

@@ -1,9 +1,16 @@
 {
   "name": "@evojewel/fethr",
-  "version": "0.0.1",
-  "publishConfig": { "access": "public" },
+  "version": "0.0.2-alpha",
+  "publishConfig": {
+    "access": "public"
+  },
   "description": "A featherweight code editor with first-class agent integration. Under construction.",
-  "keywords": ["editor", "lightweight", "agent", "claude-code"],
+  "keywords": [
+    "editor",
+    "lightweight",
+    "agent",
+    "claude-code"
+  ],
   "homepage": "https://github.com/evojewel/fethr",
   "repository": {
     "type": "git",
@@ -15,7 +22,12 @@
   "bin": {
     "fethr": "bin/fethr.js"
   },
-  "files": ["bin", "package.json", "README.md", "LICENSE"],
+  "files": [
+    "bin",
+    "package.json",
+    "README.md",
+    "LICENSE"
+  ],
   "engines": {
     "node": ">=18"
   }

@@ -22,5 +22,5 @@ editor to run yet.
 ## Links
 
 - Source: https://github.com/evojewel/fethr
-- npm: https://www.npmjs.com/package/fethr
+- npm: https://www.npmjs.com/package/@evojewel/fethr (command installed: `fethr`)
 - Author: Jewel Lukose

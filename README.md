@@ -24,8 +24,12 @@ Principles, subject to change while we build:
 ## Try the placeholder
 
 ```bash
-npx fethr
+npx @evojewel/fethr
 ```
+
+(The unscoped npm name `fethr` is blocked by npm's typosquat filter — "too similar to
+`fetch`" — so the package lives under the author scope. The installed command is still
+`fethr`.)
 
 ## License
 

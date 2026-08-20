@@ -1,6 +1,7 @@
 {
-  "name": "fethr",
+  "name": "@evojewel/fethr",
   "version": "0.0.1",
+  "publishConfig": { "access": "public" },
   "description": "A featherweight code editor with first-class agent integration. Under construction.",
   "keywords": ["editor", "lightweight", "agent", "claude-code"],
   "homepage": "https://github.com/evojewel/fethr",

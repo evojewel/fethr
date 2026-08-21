@@ -1,0 +1,42 @@
+name: publish-npm
+
+# Publishes the npm package without an interactive OTP prompt. Requires an
+# npm Automation Token (bypasses 2FA-on-publish by design) stored as the
+# NPM_TOKEN repo secret — create one at npmjs.com > Access Tokens >
+# Generate New Token > Automation, then:
+#   gh secret set NPM_TOKEN --repo evojewel/fethr
+# Until that secret exists this workflow will fail at the publish step with
+# a 401/403 — everything before it (build, pack) still verifies the release.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "npm dist-tag to publish under (e.g. alpha, latest)"
+        required: true
+        default: "alpha"
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install and build
+        run: npm ci
+
+      - name: Pack (sanity check before publishing)
+        run: npm pack --dry-run
+
+      - name: Publish
+        run: npm publish --tag ${{ inputs.tag }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

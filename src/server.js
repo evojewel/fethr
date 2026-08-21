@@ -75,6 +75,38 @@ export function serve(root, onReady, opts = {}) {
     if (req.method === "GET" && u.pathname === "/api/meta") {
       return send(res, 200, JSON.stringify({ root, name: path.basename(root) }));
     }
+    if (u.pathname === "/api/chat") {
+      // Conversation history lives with the project, not the browser — a
+      // plain file at .fethr/chat.json, so it survives across launches
+      // regardless of the server's (random) port/origin, and it's just a
+      // file the user can see, back up, or delete like anything else.
+      const chatFile = path.join(root, ".fethr", "chat.json");
+      if (req.method === "GET") {
+        try {
+          return send(res, 200, fs.readFileSync(chatFile, "utf8"));
+        } catch {
+          return send(res, 200, "null");
+        }
+      }
+      if (req.method === "PUT") {
+        let body = "";
+        req.setEncoding("utf8");
+        req.on("data", (c) => {
+          body += c;
+          if (body.length > 5 * MAX_FILE_BYTES) req.destroy();
+        });
+        req.on("end", () => {
+          try {
+            fs.mkdirSync(path.dirname(chatFile), { recursive: true });
+            fs.writeFileSync(chatFile, body, "utf8");
+            send(res, 200, "{}");
+          } catch (e) {
+            send(res, 500, JSON.stringify({ error: String(e.message || e) }));
+          }
+        });
+        return;
+      }
+    }
     if (req.method === "GET" && u.pathname === "/api/tree") {
       return send(res, 200, JSON.stringify(listTree(root)));
     }

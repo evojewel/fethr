@@ -24,7 +24,15 @@ if (arg === "--version" || arg === "-v") {
 } else {
   const args = process.argv.slice(2);
   const app = args.includes("--app");
+  const sidecar = args.includes("--sidecar");
   const dir = args.find((a) => !a.startsWith("--"));
   const { serve } = await import("../src/server.js");
-  serve(dir || process.cwd(), undefined, { app });
+  if (sidecar) {
+    // Spawned by the native app shell (src-tauri) as a child process. No
+    // banner, no browser-opening — just start the server and print a single
+    // machine-parseable line so the Rust side can read the bound port.
+    serve(dir || process.cwd(), (url) => console.log(`FETHR_URL=${url}`));
+  } else {
+    serve(dir || process.cwd(), undefined, { app });
+  }
 }

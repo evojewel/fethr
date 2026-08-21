@@ -9,6 +9,9 @@
 //
 // Auth: the Agent SDK uses the machine's existing Claude Code login.
 
+// Test comment added via the agent panel's propose_edit flow.
+// Second test comment, same flow.
+
 import path from "node:path";
 import { query, tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";

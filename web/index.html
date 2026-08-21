@@ -37,11 +37,23 @@
     cursor: pointer; font-size: 13px; padding: 2px 6px; border-radius: 4px; line-height: 1;
   }
   aside h1 button:hover { color: var(--accent); background: var(--rule); }
-  #tree { overflow-y: auto; flex: 1; padding: 6px 0; }
-  #tree div { padding: 2px 8px; cursor: default; white-space: nowrap; color: var(--muted); }
-  #tree .file { cursor: pointer; color: var(--ink); }
-  #tree .file:hover { background: var(--rule); }
-  #tree .active { background: var(--rule); color: var(--accent); }
+  #tree { overflow-y: auto; flex: 1; padding: 4px 0; }
+  #tree .row {
+    display: flex; align-items: center; gap: 4px;
+    padding: 2px 8px; white-space: nowrap; color: var(--muted); user-select: none;
+  }
+  #tree .row .chev {
+    width: 10px; flex-shrink: 0; font-size: 9px; color: var(--muted);
+    display: inline-block; transition: transform .12s ease;
+  }
+  #tree .dir-row { cursor: pointer; }
+  #tree .dir-row:hover { background: var(--rule); }
+  #tree .dir-row.collapsed .chev { transform: rotate(-90deg); }
+  #tree .file-row { cursor: pointer; color: var(--ink); }
+  #tree .file-row:hover { background: var(--rule); }
+  #tree .file-row.active { background: var(--rule); color: var(--accent); }
+  #tree .children { display: flex; flex-direction: column; }
+  #tree .children.collapsed { display: none; }
   #editor { overflow: hidden; }
   #editor .cm-editor { height: 100%; font-size: 13px; }
   #editor .cm-scroller { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
@@ -53,6 +65,11 @@
   #file { color: var(--ink); }
   #status { color: var(--accent); }
   footer .hint { margin-left: auto; }
+  footer label.autosave {
+    display: flex; align-items: center; gap: 4px; margin-left: auto;
+    cursor: pointer; user-select: none;
+  }
+  footer label.autosave input { accent-color: var(--accent); cursor: pointer; }
   footer button {
     background: none; border: 1px solid var(--rule); color: var(--muted);
     border-radius: 5px; padding: 1px 10px; font-size: 12px; cursor: pointer;
@@ -166,7 +183,9 @@
 <footer>
   <span id="file">no file open</span>
   <span id="status"></span>
-  <span class="hint">⌘S saves</span>
+  <label class="autosave" title="Save shortly after you stop typing. ⌘S always saves immediately.">
+    <input type="checkbox" id="autosave" checked> auto-save
+  </label>
   <button id="toggle-agent" title="⌘J">agent</button>
 </footer>
 <script type="module" src="/editor.js"></script>

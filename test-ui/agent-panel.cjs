@@ -40,6 +40,8 @@ async function main() {
 
   const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "fethr-ui-test-"));
   fs.writeFileSync(path.join(fixture, "app.js"), "console.log('hi')\n");
+  fs.mkdirSync(path.join(fixture, "lib"));
+  fs.writeFileSync(path.join(fixture, "lib", "util.js"), "export const x = 1;\n");
 
   const url = await new Promise((resolve) => serve(fixture, resolve));
   const browser = await puppeteer.launch({ executablePath: findChrome(), headless: true });
@@ -88,24 +90,60 @@ async function main() {
     const sidebarPersisted = await page.evaluate(() => localStorage.getItem("fethr.sidebarCollapsed"));
     check("sidebar collapse state persists to localStorage", sidebarPersisted === "0");
 
+    // Folder accordion: a directory row toggles its own children only
+    const dirVisible = await page.$eval(
+      "#tree .file-row[data-p='lib/util.js']",
+      (el) => el.getBoundingClientRect().height > 0
+    );
+    check("tree: nested file starts visible (expanded by default)", dirVisible);
+    await page.click("#tree .dir-row");
+    const hiddenAfterCollapse = await page.$eval(
+      "#tree .file-row[data-p='lib/util.js']",
+      (el) => el.getBoundingClientRect().height === 0
+    );
+    check("tree: clicking a folder collapses its children", hiddenAfterCollapse);
+    const topFileStillVisible = await page.$eval(
+      "#tree .file-row[data-p='app.js']",
+      (el) => el.getBoundingClientRect().height > 0
+    );
+    check("tree: collapsing one folder doesn't affect sibling files", topFileStillVisible);
+    await page.click("#tree .dir-row");
+    const visibleAfterReexpand = await page.$eval(
+      "#tree .file-row[data-p='lib/util.js']",
+      (el) => el.getBoundingClientRect().height > 0
+    );
+    check("tree: clicking again re-expands", visibleAfterReexpand);
+
+    // Auto-save: on by default, and typing eventually persists without ⌘S
+    check("auto-save checkbox is checked by default", await page.$eval("#autosave", (el) => el.checked));
+    await page.click("#tree .file-row[data-p='app.js']");
+    await page.waitForFunction(() => document.querySelector("#file").textContent.includes("app.js"));
+    await page.click(".cm-content");
+    await page.keyboard.type("\n// edited");
+    await page.waitForFunction(() => document.querySelector("#status").textContent === "saved", { timeout: 3000 });
+    check("auto-save: edit persists to disk without ⌘S", true);
+    const onDisk = fs.readFileSync(path.join(fixture, "app.js"), "utf8");
+    check("auto-save: file content on disk actually changed", onDisk.includes("// edited"));
+
     await page.close();
   }
 
-  // ---- App-shell mode (window.__TAURI__ present): input must stay usable ----
+  // ---- Chat history persists across a reload (survives the random-port
+  // restart scenario since it reads back through the same running server) ----
   {
     const page = await browser.newPage();
-    await page.evaluateOnNewDocument(() => {
-      window.__TAURI__ = { core: { invoke: async () => ({}) } };
-    });
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 10000 });
-    await page.waitForSelector("#toggle-agent", { timeout: 5000 });
+    await page.goto(url, { waitUntil: "domcontentloaded" });
     await page.click("#toggle-agent");
-    check("app mode: input is NOT disabled", (await page.$eval("#input", (el) => el.disabled)) === false);
-    await page.type("#input", "test");
-    check("app mode: input accepts keystrokes", (await page.$eval("#input", (el) => el.value)) === "test");
+    await page.type("#input", "remember this");
     await page.keyboard.press("Enter");
-    await page.waitForFunction(() => document.querySelectorAll("#chat code").length > 0, { timeout: 3000 });
-    check("app mode: Enter shows an actionable CLI-mode notice (not silence)", true);
+    await page.waitForFunction(() => document.querySelectorAll("#chat .msg.user").length > 0, { timeout: 5000 });
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.click("#toggle-agent");
+    await page.waitForFunction(
+      () => [...document.querySelectorAll("#chat .msg.user")].some((e) => e.textContent.includes("remember this")),
+      { timeout: 5000 }
+    );
+    check("chat history: prior prompt restored after reload", true);
     await page.close();
   }
 

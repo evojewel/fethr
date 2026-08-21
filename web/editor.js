@@ -29,28 +29,51 @@ const langC = new Compartment();
 let current = null;
 let dirty = false;
 
-// Transport: HTTP against the local server (CLI mode) or Tauri invoke (app shell).
-const TAURI = typeof window.__TAURI__ !== "undefined" ? window.__TAURI__.core : null;
+// Transport: fetch against the local server. In the native app shell (v0.3+)
+// that server is a bundled Node sidecar the Rust side spawns and points the
+// window at — same server.js, same origin-relative paths, so this file has
+// no app-vs-CLI branching to carry.
 const api = {
-  meta: () => (TAURI ? TAURI.invoke("meta") : fetch("/api/meta").then((r) => r.json())),
-  tree: () => (TAURI ? TAURI.invoke("tree") : fetch("/api/tree").then((r) => r.json())),
+  meta: () => fetch("/api/meta").then((r) => r.json()),
+  tree: () => fetch("/api/tree").then((r) => r.json()),
   read: async (p) => {
-    if (TAURI) return TAURI.invoke("read_file", { p });
     const r = await fetch(`/api/file?p=${encodeURIComponent(p)}`);
     if (!r.ok) throw new Error("not found");
     return (await r.json()).content;
   },
   save: async (p, content) => {
-    if (TAURI) return TAURI.invoke("save_file", { p, content });
     const r = await fetch(`/api/file?p=${encodeURIComponent(p)}`, { method: "PUT", body: content });
     if (!r.ok) throw new Error("save failed");
   },
+  loadChat: () => fetch("/api/chat").then((r) => r.json()).catch(() => null),
+  saveChat: (data) => fetch("/api/chat", { method: "PUT", body: JSON.stringify(data) }).catch(() => {}),
 };
 
 const setStatus = (t) => { $("#status").textContent = t; };
+
+let autoSaveTimer = null;
+function scheduleAutoSave() {
+  if (!$("#autosave").checked) return;
+  clearTimeout(autoSaveTimer);
+  autoSaveTimer = setTimeout(() => {
+    if (dirty) save();
+  }, 800);
+}
+
 const markDirty = (d) => {
   dirty = d;
   $("#file").textContent = current ? current + (d ? " •" : "") : "no file open";
+  if (d) scheduleAutoSave();
+};
+
+try {
+  const v = localStorage.getItem("fethr.autoSave");
+  $("#autosave").checked = v === null ? true : v === "1"; // on by default
+} catch { /* private mode — stays checked, just doesn't persist */ }
+$("#autosave").onchange = () => {
+  try {
+    localStorage.setItem("fethr.autoSave", $("#autosave").checked ? "1" : "0");
+  } catch { /* ignore */ }
 };
 
 const view = new EditorView({
@@ -93,6 +116,7 @@ async function openFile(p) {
 
 async function save() {
   if (!current) return;
+  clearTimeout(autoSaveTimer);
   try {
     await api.save(current, view.state.doc.toString());
     markDirty(false);
@@ -103,26 +127,50 @@ async function save() {
   }
 }
 
+// Server/Rust both walk directories in pre-order (a dir's descendants
+// immediately follow it, before its next sibling), so a single pass with a
+// depth stack is enough to build the nested accordion — no second tree pass.
+function renderTree(entries) {
+  const el = $("#tree");
+  el.innerHTML = "";
+  const stack = [{ depth: 0, el }];
+  for (const n of entries) {
+    const depth = n.path.split("/").length;
+    while (stack.length > 1 && stack[stack.length - 1].depth >= depth) stack.pop();
+    const parent = stack[stack.length - 1].el;
+    const name = n.path.split("/").pop();
+    const row = document.createElement("div");
+    row.style.paddingLeft = 8 + (depth - 1) * 14 + "px";
+    if (n.dir) {
+      row.className = "row dir-row";
+      const chev = document.createElement("span");
+      chev.className = "chev";
+      chev.textContent = "▾";
+      row.append(chev, document.createTextNode(name));
+      const children = document.createElement("div");
+      children.className = "children";
+      row.onclick = () => {
+        row.classList.toggle("collapsed");
+        children.classList.toggle("collapsed");
+      };
+      parent.append(row, children);
+      stack.push({ depth, el: children });
+    } else {
+      row.className = "row file-row";
+      row.textContent = name;
+      row.dataset.p = n.path;
+      row.onclick = () => openFile(n.path);
+      parent.appendChild(row);
+    }
+  }
+}
+
 async function boot() {
   const meta = await api.meta();
   $("#root").textContent = meta.name;
   document.title = `${meta.name} — fethr`;
-  if (TAURI) {
-    $("#input").placeholder = "Ask the agent… (needs CLI mode — see note on Enter)";
-  }
-  const tree = await api.tree();
-  const el = $("#tree");
-  for (const n of tree) {
-    const d = document.createElement("div");
-    d.className = n.dir ? "dir" : "file";
-    d.style.paddingLeft = 10 + n.path.split("/").length * 12 + "px";
-    d.textContent = n.path.split("/").pop();
-    if (!n.dir) {
-      d.dataset.p = n.path;
-      d.onclick = () => openFile(n.path);
-    }
-    el.appendChild(d);
-  }
+  renderTree(await api.tree());
+  await restoreChat();
 }
 
 window.addEventListener("beforeunload", (e) => {
@@ -286,6 +334,54 @@ function renderMd(el, raw) {
   el.innerHTML = html;
 }
 
+// ---------- chat history — persisted to .fethr/chat.json in the workspace ----------
+// A plain project file, not browser storage: it survives across separate
+// launches even though the local server's port (and therefore origin) is
+// random each time, and it's something the user can see or delete like any
+// other file (already hidden from the sidebar — dotfiles are skipped there).
+
+let transcript = [];
+
+function persistChat() {
+  api.saveChat({ session: agentSession, entries: transcript });
+}
+
+function renderEntry(entry) {
+  if (entry.type === "user") return addMsg("user", "you", entry.text);
+  if (entry.type === "assistant") {
+    const el = addMsg("assistant", "agent", "");
+    renderMd(el, entry.text);
+    return el;
+  }
+  if (entry.type === "thought") {
+    const box = document.createElement("details");
+    box.className = "thought";
+    box.innerHTML = "<summary>thought</summary><div class='ttext'></div>";
+    box.querySelector(".ttext").textContent = entry.text;
+    chatEl.appendChild(box);
+    return box;
+  }
+  if (entry.type === "tool") return addMsg("tool", null, entry.text);
+  if (entry.type === "proposal") return renderProposal(entry);
+}
+
+function recordAndAdd(entry) {
+  transcript.push(entry);
+  persistChat();
+  return renderEntry(entry);
+}
+
+async function restoreChat() {
+  const saved = await api.loadChat();
+  if (!saved || !Array.isArray(saved.entries) || !saved.entries.length) return;
+  agentSession = saved.session || null;
+  for (const e of saved.entries) {
+    transcript.push(e);
+    renderEntry(e);
+  }
+  addMsg("tool", null, "— restored earlier conversation —");
+}
+
 const statusEl = document.querySelector("#agent-status");
 const phaseEl = $("#phase");
 let abortCtl = null;
@@ -335,7 +431,7 @@ async function askAgent(prompt) {
   abortCtl = new AbortController();
   const selectedModel = $("#model").value || undefined;
   let sawSession = false;
-  addMsg("user", "you", prompt);
+  recordAndAdd({ type: "user", text: prompt });
   const reply = addMsg("assistant", "agent", "");
   let replyRaw = "";
   let thoughtBox = null, thoughtRaw = "";
@@ -405,46 +501,35 @@ async function askAgent(prompt) {
           setPhase(ev.phase === "thinking" ? "thinking…" : "writing…");
         } else if (ev.type === "tool") {
           setPhase(`${ev.name}…`);
-          addMsg("tool", null, `⚙ ${ev.name}${ev.detail ? " " + ev.detail : ""}`);
-        } else if (ev.type === "proposal") renderProposal(ev);
-        else if (ev.type === "error") {
+          recordAndAdd({ type: "tool", text: `⚙ ${ev.name}${ev.detail ? " " + ev.detail : ""}` });
+        } else if (ev.type === "proposal") {
+          recordAndAdd({ type: "proposal", path: ev.path, content: ev.content, note: ev.note });
+        } else if (ev.type === "error") {
           if (selectedModel === "fable" && !sawSession) markFableUnavailable();
-          else addMsg("tool", null, `error: ${ev.message}`);
+          else recordAndAdd({ type: "tool", text: `error: ${ev.message}` });
         } else if (ev.type === "done" && !ev.ok) {
           if (selectedModel === "fable" && !sawSession) markFableUnavailable();
-          else addMsg("tool", null, `ended: ${ev.error}`);
+          else recordAndAdd({ type: "tool", text: `ended: ${ev.error}` });
         }
       }
     }
   } catch (e) {
-    if (e.name === "AbortError") addMsg("tool", null, "stopped");
-    else addMsg("tool", null, `agent unreachable: ${e.message}`);
+    if (e.name === "AbortError") recordAndAdd({ type: "tool", text: "stopped" });
+    else recordAndAdd({ type: "tool", text: `agent unreachable: ${e.message}` });
   } finally {
-    if (replyRaw) renderMd(reply, replyRaw);
-    if (thoughtBox) thoughtBox.querySelector("summary").textContent = "thought";
+    if (replyRaw) {
+      renderMd(reply, replyRaw);
+      transcript.push({ type: "assistant", text: replyRaw });
+    }
+    if (thoughtBox) {
+      thoughtBox.querySelector("summary").textContent = "thought";
+      transcript.push({ type: "thought", text: thoughtRaw });
+    }
+    if (replyRaw || thoughtBox) persistChat();
     setPhase(null);
     streaming = false;
     abortCtl = null;
   }
-}
-
-const CLI_CMD = "npx @evojewel/fethr@alpha .";
-
-function showCliOnlyNotice() {
-  addMsg("user", "you", inputEl.dataset.lastAsk || "");
-  const d = addMsg("tool", null, "The agent needs the CLI mode's local server — the app shell has no agent backend yet. Run this in the folder you want to edit:\n");
-  const code = document.createElement("code");
-  code.textContent = CLI_CMD;
-  code.style.display = "block";
-  code.style.margin = "6px 0";
-  code.style.cursor = "pointer";
-  code.title = "Click to copy";
-  code.onclick = () => {
-    navigator.clipboard.writeText(CLI_CMD).catch(() => {});
-    code.textContent = "copied ✓";
-    setTimeout(() => (code.textContent = CLI_CMD), 1200);
-  };
-  d.appendChild(code);
 }
 
 inputEl.addEventListener("keydown", (e) => {
@@ -453,19 +538,13 @@ inputEl.addEventListener("keydown", (e) => {
     const t = inputEl.value.trim();
     if (!t || streaming) return;
     inputEl.value = "";
-    if (TAURI) {
-      inputEl.dataset.lastAsk = t;
-      showCliOnlyNotice();
-    } else {
-      askAgent(t);
-    }
+    askAgent(t);
   }
 });
 
-// Heartbeat — lets the server exit when the window closes (CLI mode only).
-if (!TAURI) {
-  setInterval(() => fetch("/api/alive", { method: "POST" }).catch(() => {}), 5000);
-  fetch("/api/alive", { method: "POST" }).catch(() => {});
-}
+// Heartbeat — lets the server (CLI-spawned or app-shell sidecar alike) exit
+// when the window closes, instead of lingering as an orphaned process.
+setInterval(() => fetch("/api/alive", { method: "POST" }).catch(() => {}), 5000);
+fetch("/api/alive", { method: "POST" }).catch(() => {});
 
 boot();

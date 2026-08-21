@@ -1,0 +1,68 @@
+name: build-shell
+
+# Builds the native macOS app (v0.3) and a plain DMG on a clean macOS runner,
+# then uploads it to the given release. Manual, mirroring gigback's bottle.yml.
+#
+# Deliberately skips Tauri's built-in DMG bundler and drives hdiutil directly.
+# Tauri's bundler asks Finder (via AppleScript) to lay out icons prettily,
+# which needs a macOS Automation permission — a GUI-only TCC prompt with no
+# non-interactive grant path, on a local dev machine *or* a CI runner. The
+# plain DMG this produces is functionally identical, just unstyled.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to attach the DMG to (e.g. v0.6.0-alpha)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-shell:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install deps and build the frontend bundle
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build the app bundle (skip Tauri's DMG step)
+        run: npx tauri build --bundles app
+
+      - name: Package a plain DMG via hdiutil
+        id: dmg
+        run: |
+          ver=$(node -p "require('./package.json').version" | sed 's/-alpha$//')
+          src=/tmp/fethr-dmg-src
+          rm -rf "$src" && mkdir -p "$src"
+          cp -R src-tauri/target/release/bundle/macos/fethr.app "$src/"
+          ln -s /Applications "$src/Applications"
+          out="fethr_${ver}_aarch64.dmg"
+          hdiutil create -volname fethr -srcfolder "$src" -ov -format UDZO "$out"
+          echo "file=$out" >> "$GITHUB_OUTPUT"
+
+      - name: Verify the DMG mounts and contains the app
+        run: |
+          mp=/tmp/fethr-dmg-verify
+          hdiutil attach "${{ steps.dmg.outputs.file }}" -nobrowse -mountpoint "$mp"
+          test -d "$mp/fethr.app"
+          hdiutil detach "$mp"
+
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ inputs.tag }}" "${{ steps.dmg.outputs.file }}" \
+            --repo evojewel/fethr --clobber

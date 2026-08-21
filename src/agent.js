@@ -50,7 +50,9 @@ function emit(res, obj) {
   res.write(`data: ${JSON.stringify(obj)}\n\n`);
 }
 
-async function run(root, { prompt, sessionId, context }, req, res) {
+const MODEL_ALIASES = new Set(["opus", "sonnet", "haiku"]);
+
+async function run(root, { prompt, sessionId, context, model }, req, res) {
   res.writeHead(200, {
     "content-type": "text/event-stream",
     "cache-control": "no-store",
@@ -101,6 +103,7 @@ async function run(root, { prompt, sessionId, context }, req, res) {
       ],
       includePartialMessages: true,
       ...(sessionId ? { resume: sessionId } : {}),
+      ...(model && MODEL_ALIASES.has(model) ? { model } : {}),
     },
   });
 
@@ -112,12 +115,25 @@ async function run(root, { prompt, sessionId, context }, req, res) {
     if (msg.type === "system" && msg.subtype === "init") {
       emit(res, { type: "session", id: msg.session_id });
     } else if (msg.type === "stream_event") {
-      const d = msg.event && msg.event.delta;
+      const ev = msg.event || {};
+      const d = ev.delta;
       if (d && d.type === "text_delta") emit(res, { type: "delta", text: d.text });
+      else if (d && d.type === "thinking_delta" && d.thinking) {
+        emit(res, { type: "thinking", text: d.thinking });
+      } else if (ev.type === "content_block_start" && ev.content_block) {
+        if (ev.content_block.type === "thinking") emit(res, { type: "phase", phase: "thinking" });
+        else if (ev.content_block.type === "text") emit(res, { type: "phase", phase: "writing" });
+      }
     } else if (msg.type === "assistant") {
       const blocks = (msg.message && msg.message.content) || msg.content || [];
       for (const b of blocks) {
-        if (b.type === "tool_use") emit(res, { type: "tool", name: b.name });
+        if (b.type === "tool_use") {
+          const i = b.input || {};
+          const detail =
+            i.file_path || i.path || i.pattern || i.query ||
+            (typeof i.command === "string" ? i.command.slice(0, 60) : "") || "";
+          emit(res, { type: "tool", name: b.name.replace(/^mcp__fethr__/, ""), detail });
+        }
       }
     } else if (msg.type === "result") {
       emit(res, {

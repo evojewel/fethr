@@ -29,6 +29,24 @@ const langC = new Compartment();
 let current = null;
 let dirty = false;
 
+// Transport: HTTP against the local server (CLI mode) or Tauri invoke (app shell).
+const TAURI = typeof window.__TAURI__ !== "undefined" ? window.__TAURI__.core : null;
+const api = {
+  meta: () => (TAURI ? TAURI.invoke("meta") : fetch("/api/meta").then((r) => r.json())),
+  tree: () => (TAURI ? TAURI.invoke("tree") : fetch("/api/tree").then((r) => r.json())),
+  read: async (p) => {
+    if (TAURI) return TAURI.invoke("read_file", { p });
+    const r = await fetch(`/api/file?p=${encodeURIComponent(p)}`);
+    if (!r.ok) throw new Error("not found");
+    return (await r.json()).content;
+  },
+  save: async (p, content) => {
+    if (TAURI) return TAURI.invoke("save_file", { p, content });
+    const r = await fetch(`/api/file?p=${encodeURIComponent(p)}`, { method: "PUT", body: content });
+    if (!r.ok) throw new Error("save failed");
+  },
+};
+
 const setStatus = (t) => { $("#status").textContent = t; };
 const markDirty = (d) => {
   dirty = d;
@@ -58,9 +76,12 @@ const extensions = () => [
 
 async function openFile(p) {
   if (dirty && !confirm(`Discard unsaved changes in ${current}?`)) return;
-  const r = await fetch(`/api/file?p=${encodeURIComponent(p)}`);
-  if (!r.ok) return setStatus(`could not open ${p}`);
-  const { content } = await r.json();
+  let content;
+  try {
+    content = await api.read(p);
+  } catch {
+    return setStatus(`could not open ${p}`);
+  }
   current = p;
   view.setState(EditorState.create({ doc: content, extensions: extensions() }));
   markDirty(false);
@@ -72,24 +93,25 @@ async function openFile(p) {
 
 async function save() {
   if (!current) return;
-  const r = await fetch(`/api/file?p=${encodeURIComponent(current)}`, {
-    method: "PUT",
-    body: view.state.doc.toString(),
-  });
-  if (r.ok) {
+  try {
+    await api.save(current, view.state.doc.toString());
     markDirty(false);
     setStatus("saved");
     setTimeout(() => setStatus(""), 1500);
-  } else {
+  } catch {
     setStatus("save failed");
   }
 }
 
 async function boot() {
-  const meta = await (await fetch("/api/meta")).json();
+  const meta = await api.meta();
   $("#root").textContent = meta.name;
   document.title = `${meta.name} — fethr`;
-  const tree = await (await fetch("/api/tree")).json();
+  if (TAURI) {
+    $("#input").disabled = true;
+    $("#input").placeholder = "The agent panel runs in CLI mode: npx @evojewel/fethr@alpha";
+  }
+  const tree = await api.tree();
   const el = $("#tree");
   for (const n of tree) {
     const d = document.createElement("div");
@@ -216,10 +238,43 @@ function renderProposal(p) {
   chatEl.scrollTop = chatEl.scrollHeight;
 }
 
+// Minimal safe markdown: escape everything, then fences / inline code / bold.
+function renderMd(el, raw) {
+  const esc = raw.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  let html = esc.replace(/```(\w*)\n([\s\S]*?)```/g, (_, _lang, code) => `<pre>${code}</pre>`);
+  html = html.replace(/`([^`\n]+)`/g, "<code>$1</code>");
+  html = html.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+  el.innerHTML = html;
+}
+
+const statusEl = document.querySelector("#agent-status");
+const phaseEl = $("#phase");
+let abortCtl = null;
+
+function setPhase(label) {
+  if (label) {
+    statusEl.classList.add("on");
+    phaseEl.textContent = label;
+  } else {
+    statusEl.classList.remove("on");
+  }
+}
+
+$("#stop").onclick = () => abortCtl && abortCtl.abort();
+
+$("#model").onchange = () => {
+  agentSession = null;
+  addMsg("tool", null, `model → ${$("#model").value || "default"} (new conversation)`);
+};
+
 async function askAgent(prompt) {
   streaming = true;
+  abortCtl = new AbortController();
   addMsg("user", "you", prompt);
   const reply = addMsg("assistant", "agent", "");
+  let replyRaw = "";
+  let thoughtBox = null, thoughtRaw = "";
+  setPhase("thinking…");
 
   const context = current
     ? {
@@ -236,7 +291,13 @@ async function askAgent(prompt) {
     const r = await fetch("/api/agent", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ prompt, sessionId: agentSession, context }),
+      signal: abortCtl.signal,
+      body: JSON.stringify({
+        prompt,
+        sessionId: agentSession,
+        context,
+        model: $("#model").value || undefined,
+      }),
     });
     if (!r.ok || !r.body) {
       const err = await r.json().catch(() => ({}));
@@ -258,18 +319,39 @@ async function askAgent(prompt) {
         const ev = JSON.parse(chunk.slice(6));
         if (ev.type === "session") agentSession = ev.id;
         else if (ev.type === "delta") {
-          reply.appendChild(document.createTextNode(ev.text));
+          replyRaw += ev.text;
+          reply.textContent = replyRaw;
+          setPhase("writing…");
           chatEl.scrollTop = chatEl.scrollHeight;
-        } else if (ev.type === "tool") addMsg("tool", null, `⚙ ${ev.name}`);
-        else if (ev.type === "proposal") renderProposal(ev);
+        } else if (ev.type === "thinking") {
+          if (!thoughtBox) {
+            thoughtBox = document.createElement("details");
+            thoughtBox.className = "thought";
+            thoughtBox.innerHTML = "<summary>thinking…</summary><div class='ttext'></div>";
+            reply.parentNode.insertBefore(thoughtBox, reply);
+          }
+          thoughtRaw += ev.text;
+          thoughtBox.querySelector(".ttext").textContent = thoughtRaw;
+          setPhase("thinking…");
+        } else if (ev.type === "phase") {
+          setPhase(ev.phase === "thinking" ? "thinking…" : "writing…");
+        } else if (ev.type === "tool") {
+          setPhase(`${ev.name}…`);
+          addMsg("tool", null, `⚙ ${ev.name}${ev.detail ? " " + ev.detail : ""}`);
+        } else if (ev.type === "proposal") renderProposal(ev);
         else if (ev.type === "error") addMsg("tool", null, `error: ${ev.message}`);
         else if (ev.type === "done" && !ev.ok) addMsg("tool", null, `ended: ${ev.error}`);
       }
     }
   } catch (e) {
-    addMsg("tool", null, `agent unreachable: ${e.message}`);
+    if (e.name === "AbortError") addMsg("tool", null, "stopped");
+    else addMsg("tool", null, `agent unreachable: ${e.message}`);
   } finally {
+    if (replyRaw) renderMd(reply, replyRaw);
+    if (thoughtBox) thoughtBox.querySelector("summary").textContent = "thought";
+    setPhase(null);
     streaming = false;
+    abortCtl = null;
   }
 }
 
@@ -284,8 +366,10 @@ inputEl.addEventListener("keydown", (e) => {
   }
 });
 
-// Heartbeat — lets the server exit when the window closes.
-setInterval(() => fetch("/api/alive", { method: "POST" }).catch(() => {}), 5000);
-fetch("/api/alive", { method: "POST" }).catch(() => {});
+// Heartbeat — lets the server exit when the window closes (CLI mode only).
+if (!TAURI) {
+  setInterval(() => fetch("/api/alive", { method: "POST" }).catch(() => {}), 5000);
+  fetch("/api/alive", { method: "POST" }).catch(() => {});
+}
 
 boot();

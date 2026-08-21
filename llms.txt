@@ -25,7 +25,12 @@ The agent panel (Cmd-J) runs on the Claude Agent SDK using the machine's existin
 Code login. It is read-only by construction (Read/Grep/Glob only; all mutating tools
 disabled); its sole change mechanism is a propose_edit tool whose proposals render as diff
 cards the writer accepts or rejects — accepted edits apply in the editor, never directly
-to disk.
+to disk. The panel shows live agent state (thinking/tool/writing phases, streamed thinking
+in a collapsible block, per-tool activity detail), has a stop button and a model picker
+(default/opus/sonnet/haiku), and renders markdown replies.
+
+A native macOS app shell (Tauri, src-tauri/) provides the same editor fully self-contained
+(file API as Rust commands, no Node); the agent panel there points to CLI mode.
 
 ## Links
 

@@ -53,6 +53,23 @@ anything about the project; the current file and selection travel as context aut
 - **Edits arrive as proposals.** The agent's only change mechanism is `propose_edit`; you
   see a diff card, and Accept applies it *in the editor* where ⌘Z works and ⌘S saves.
   The agent process never touches your disk.
+- **You can see it working:** a live status line (thinking… / tool name / writing…),
+  streamed thinking in a collapsible block, per-tool activity with the file or pattern it's
+  touching, a stop button, and a model picker (default / opus / sonnet / haiku — switching
+  starts a fresh conversation). Replies render markdown.
+
+## The app shell (v0.3)
+
+`src-tauri/` builds a native macOS window — the same editor UI with the file API
+implemented as Rust commands instead of a local server: fully self-contained, ~10 MB,
+no Node required. The agent panel is CLI-mode only for now (it needs the Node runtime);
+the app shell points you at `npx @evojewel/fethr@alpha` for agent work.
+
+```bash
+cd src-tauri && cargo tauri build   # or: npx tauri build (from the repo root)
+```
+
+Unsigned local builds work immediately; distribution builds need code signing.
 
 (The unscoped npm name `fethr` is blocked by npm's typosquat filter — "too similar to
 `fetch`" — so the package lives under the author scope. The installed command is still

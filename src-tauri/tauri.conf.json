@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "fethr",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "identifier": "dev.fethr.app",
   "build": {
     "frontendDist": "../dist",
@@ -11,6 +11,7 @@
   "app": {
     "windows": [
       {
+        "create": false,
         "title": "fethr",
         "width": 1100,
         "height": 720,
@@ -24,8 +25,7 @@
     ],
     "security": {
       "csp": null
-    },
-    "withGlobalTauri": true
+    }
   },
   "bundle": {
     "active": true,
@@ -36,6 +36,13 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
+    ],
+    "resources": [
+      "sidecar/bin/**/*",
+      "sidecar/src/**/*",
+      "sidecar/dist/**/*",
+      "sidecar/node_modules/**/*",
+      "sidecar/package.json"
     ],
     "android": {
       "debugApplicationIdSuffix": ".debug"

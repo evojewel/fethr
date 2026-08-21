@@ -33,10 +33,11 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Install deps and build the frontend bundle
+      - name: Install deps, build the frontend bundle, stage the agent sidecar
         run: |
           npm ci
           npm run build
+          ./scripts/stage-sidecar.sh
 
       - name: Build the app bundle (skip Tauri's DMG step)
         run: npx tauri build --bundles app
@@ -48,6 +49,11 @@ jobs:
           src=/tmp/fethr-dmg-src
           rm -rf "$src" && mkdir -p "$src"
           cp -R src-tauri/target/release/bundle/macos/fethr.app "$src/"
+          # cp -R invalidates the app bundle's ad-hoc code-signature seal
+          # (spctl: "code has no resources but signature indicates they
+          # must be present") — reseal against the copy's actual contents
+          # before packaging, or Gatekeeper rejects it on first launch.
+          codesign --deep --force -s - "$src/fethr.app"
           ln -s /Applications "$src/Applications"
           out="fethr_${ver}_aarch64.dmg"
           hdiutil create -volname fethr -srcfolder "$src" -ov -format UDZO "$out"

@@ -63,15 +63,23 @@ anything about the project; the current file and selection travel as context aut
   editor buffer without a manual Accept click — still not written to disk until you ⌘S,
   still fully undoable with ⌘Z. Off by default; your choice persists locally.
 
-## The app shell (v0.3)
+## The app shell (v0.3, agent parity as of v0.7)
 
-`src-tauri/` builds a native macOS window — the same editor UI with the file API
-implemented as Rust commands instead of a local server: fully self-contained, ~10 MB,
-no Node required. The agent panel is CLI-mode only for now (it needs the Node runtime);
-the app shell points you at `npx @evojewel/fethr@alpha` for agent work.
+`src-tauri/` builds a native macOS window with the full agent panel included. Rather
+than reimplementing the agent in Rust, the app bundles the same Node server CLI mode
+uses (as a "sidecar" under `Resources/sidecar/`) and points the native window's WebView
+at it on launch — same HTML/JS, same `fetch()` transport, same `src/agent.js` safety
+model. Nothing agent-side had to change; only how the window boots.
+
+**The honest tradeoff:** this needs a system Node install (the sidecar is Node source
++ its runtime deps, not a bundled Node binary — the app looks in Homebrew/nvm's usual
+install locations, no PATH configuration needed), and the Claude Agent SDK alone is
+~335 MB, so this build lands around 360 MB — a real cost of shipping the agent inside a
+native app. `npx @evojewel/fethr` stays the lightweight, Node-runtime-only option.
 
 ```bash
-cd src-tauri && cargo tauri build   # or: npx tauri build (from the repo root)
+npm run build && ./scripts/stage-sidecar.sh   # bundle the frontend + a minimal sidecar
+npx tauri build --bundles app                  # or: cd src-tauri && cargo tauri build
 ```
 
 Unsigned local builds work immediately; distribution builds need code signing.

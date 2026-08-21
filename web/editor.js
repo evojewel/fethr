@@ -108,8 +108,7 @@ async function boot() {
   $("#root").textContent = meta.name;
   document.title = `${meta.name} — fethr`;
   if (TAURI) {
-    $("#input").disabled = true;
-    $("#input").placeholder = "The agent panel runs in CLI mode: npx @evojewel/fethr@alpha";
+    $("#input").placeholder = "Ask the agent… (needs CLI mode — see note on Enter)";
   }
   const tree = await api.tree();
   const el = $("#tree");
@@ -355,12 +354,35 @@ async function askAgent(prompt) {
   }
 }
 
+const CLI_CMD = "npx @evojewel/fethr@alpha .";
+
+function showCliOnlyNotice() {
+  addMsg("user", "you", inputEl.dataset.lastAsk || "");
+  const d = addMsg("tool", null, "The agent needs the CLI mode's local server — the app shell has no agent backend yet. Run this in the folder you want to edit:\n");
+  const code = document.createElement("code");
+  code.textContent = CLI_CMD;
+  code.style.display = "block";
+  code.style.margin = "6px 0";
+  code.style.cursor = "pointer";
+  code.title = "Click to copy";
+  code.onclick = () => {
+    navigator.clipboard.writeText(CLI_CMD).catch(() => {});
+    code.textContent = "copied ✓";
+    setTimeout(() => (code.textContent = CLI_CMD), 1200);
+  };
+  d.appendChild(code);
+}
+
 inputEl.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
     const t = inputEl.value.trim();
-    if (t && !streaming) {
-      inputEl.value = "";
+    if (!t || streaming) return;
+    inputEl.value = "";
+    if (TAURI) {
+      inputEl.dataset.lastAsk = t;
+      showCliOnlyNotice();
+    } else {
       askAgent(t);
     }
   }

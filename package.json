@@ -1,10 +1,10 @@
 {
   "name": "@evojewel/fethr",
-  "version": "0.5.0-alpha",
+  "version": "0.5.1-alpha",
   "publishConfig": {
     "access": "public"
   },
-  "description": "A featherweight code editor with a first-class agent panel. Local server + your browser as the shell, CodeMirror core, Claude-powered agent that proposes \u2014 never writes. No Electron.",
+  "description": "A featherweight code editor with a first-class agent panel. Local server + your browser as the shell, CodeMirror core, Claude-powered agent that proposes — never writes. No Electron.",
   "keywords": [
     "editor",
     "lightweight",
@@ -50,7 +50,8 @@
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",
-    "esbuild": "^0.28.2"
+    "esbuild": "^0.28.2",
+    "puppeteer-core": "^25.8.0"
   },
   "scripts": {
     "build": "esbuild web/editor.js --bundle --format=esm --minify --outfile=dist/editor.js && cp web/index.html dist/index.html",

@@ -129,6 +129,36 @@ window.addEventListener("beforeunload", (e) => {
   if (dirty) e.preventDefault();
 });
 
+// ---------- sidebar ----------
+
+const syncSidebarIcon = () => {
+  $("#toggle-sidebar").textContent = document.body.classList.contains("sidebar-collapsed") ? "›" : "‹";
+};
+const toggleSidebar = () => {
+  document.body.classList.toggle("sidebar-collapsed");
+  syncSidebarIcon();
+  try {
+    localStorage.setItem(
+      "fethr.sidebarCollapsed",
+      document.body.classList.contains("sidebar-collapsed") ? "1" : "0"
+    );
+  } catch { /* private mode / storage blocked — just don't persist */ }
+};
+$("#toggle-sidebar").onclick = toggleSidebar;
+try {
+  if (localStorage.getItem("fethr.sidebarCollapsed") === "1") {
+    document.body.classList.add("sidebar-collapsed");
+  }
+} catch { /* ignore */ }
+syncSidebarIcon();
+
+window.addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key === "b") {
+    e.preventDefault();
+    toggleSidebar();
+  }
+});
+
 // ---------- agent panel ----------
 
 let agentSession = null;
@@ -185,6 +215,12 @@ function lineDiff(a, b) {
   return out;
 }
 
+async function applyProposal(p) {
+  if (p.path !== current) await openFile(p.path);
+  view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: p.content } });
+  markDirty(true);
+}
+
 function renderProposal(p) {
   const box = document.createElement("div");
   box.className = "proposal";
@@ -216,22 +252,26 @@ function renderProposal(p) {
 
   const actions = document.createElement("div");
   actions.className = "pactions";
-  const accept = document.createElement("button");
-  accept.className = "accept";
-  accept.textContent = "Accept";
-  const reject = document.createElement("button");
-  reject.textContent = "Reject";
-  const done = (label) => {
-    actions.textContent = label;
-  };
-  accept.onclick = async () => {
-    if (p.path !== current) await openFile(p.path);
-    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: p.content } });
-    markDirty(true);
-    done("accepted — review and ⌘S to save");
-  };
-  reject.onclick = () => done("rejected");
-  actions.append(accept, reject);
+
+  if ($("#auto").checked) {
+    applyProposal(p);
+    actions.textContent = "auto-applied — review and ⌘S to save";
+  } else {
+    const accept = document.createElement("button");
+    accept.className = "accept";
+    accept.textContent = "Accept";
+    const reject = document.createElement("button");
+    reject.textContent = "Reject";
+    const done = (label) => {
+      actions.textContent = label;
+    };
+    accept.onclick = async () => {
+      await applyProposal(p);
+      done("accepted — review and ⌘S to save");
+    };
+    reject.onclick = () => done("rejected");
+    actions.append(accept, reject);
+  }
   box.appendChild(actions);
   chatEl.appendChild(box);
   chatEl.scrollTop = chatEl.scrollHeight;
@@ -266,9 +306,35 @@ $("#model").onchange = () => {
   addMsg("tool", null, `model → ${$("#model").value || "default"} (new conversation)`);
 };
 
+try {
+  $("#auto").checked = localStorage.getItem("fethr.autoApply") === "1";
+} catch { /* ignore */ }
+$("#auto").onchange = () => {
+  try {
+    localStorage.setItem("fethr.autoApply", $("#auto").checked ? "1" : "0");
+  } catch { /* ignore */ }
+};
+
+// fable 5 isn't detectable ahead of time without an extra probe call (the
+// Agent SDK runs on the machine's Claude Code login, not a raw API key, so
+// there's no cheap models.list() here) — show it optimistically and fold on
+// the first real failure instead of paying a probe on every panel open.
+function markFableUnavailable() {
+  const opt = document.querySelector("#model option[value='fable']");
+  if (opt) {
+    opt.disabled = true;
+    opt.textContent = "fable 5 (unavailable)";
+  }
+  $("#model").value = "";
+  agentSession = null;
+  addMsg("tool", null, "fable 5 isn't available on this account — switched back to default.");
+}
+
 async function askAgent(prompt) {
   streaming = true;
   abortCtl = new AbortController();
+  const selectedModel = $("#model").value || undefined;
+  let sawSession = false;
   addMsg("user", "you", prompt);
   const reply = addMsg("assistant", "agent", "");
   let replyRaw = "";
@@ -295,11 +361,12 @@ async function askAgent(prompt) {
         prompt,
         sessionId: agentSession,
         context,
-        model: $("#model").value || undefined,
+        model: selectedModel,
       }),
     });
     if (!r.ok || !r.body) {
       const err = await r.json().catch(() => ({}));
+      if (selectedModel === "fable") return markFableUnavailable();
       reply.appendChild(document.createTextNode(err.error || `agent error (${r.status})`));
       return;
     }
@@ -316,8 +383,10 @@ async function askAgent(prompt) {
         buf = buf.slice(idx + 2);
         if (!chunk.startsWith("data: ")) continue;
         const ev = JSON.parse(chunk.slice(6));
-        if (ev.type === "session") agentSession = ev.id;
-        else if (ev.type === "delta") {
+        if (ev.type === "session") {
+          agentSession = ev.id;
+          sawSession = true;
+        } else if (ev.type === "delta") {
           replyRaw += ev.text;
           reply.textContent = replyRaw;
           setPhase("writing…");
@@ -338,8 +407,13 @@ async function askAgent(prompt) {
           setPhase(`${ev.name}…`);
           addMsg("tool", null, `⚙ ${ev.name}${ev.detail ? " " + ev.detail : ""}`);
         } else if (ev.type === "proposal") renderProposal(ev);
-        else if (ev.type === "error") addMsg("tool", null, `error: ${ev.message}`);
-        else if (ev.type === "done" && !ev.ok) addMsg("tool", null, `ended: ${ev.error}`);
+        else if (ev.type === "error") {
+          if (selectedModel === "fable" && !sawSession) markFableUnavailable();
+          else addMsg("tool", null, `error: ${ev.message}`);
+        } else if (ev.type === "done" && !ev.ok) {
+          if (selectedModel === "fable" && !sawSession) markFableUnavailable();
+          else addMsg("tool", null, `ended: ${ev.error}`);
+        }
       }
     }
   } catch (e) {

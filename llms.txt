@@ -26,8 +26,11 @@ Code login. It is read-only by construction (Read/Grep/Glob only; all mutating t
 disabled); its sole change mechanism is a propose_edit tool whose proposals render as diff
 cards the writer accepts or rejects — accepted edits apply in the editor, never directly
 to disk. The panel shows live agent state (thinking/tool/writing phases, streamed thinking
-in a collapsible block, per-tool activity detail), has a stop button and a model picker
-(default/opus/sonnet/haiku), and renders markdown replies.
+in a collapsible block, per-tool activity detail), has a stop button, a model picker
+(default/opus/sonnet/haiku/fable 5 — fable folds back to default if unavailable on the
+account), renders markdown replies, and an auto-apply mode that skips the manual Accept
+click while still requiring an explicit save before anything hits disk. Cmd-B collapses
+the file-tree sidebar.
 
 A native macOS app shell (Tauri, src-tauri/) provides the same editor fully self-contained
 (file API as Rust commands, no Node); the agent panel there points to CLI mode.

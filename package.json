@@ -1,10 +1,10 @@
 {
   "name": "@evojewel/fethr",
-  "version": "0.5.1-alpha",
+  "version": "0.6.0-alpha",
   "publishConfig": {
     "access": "public"
   },
-  "description": "A featherweight code editor with a first-class agent panel. Local server + your browser as the shell, CodeMirror core, Claude-powered agent that proposes — never writes. No Electron.",
+  "description": "A featherweight code editor with a first-class agent panel. Local server + your browser as the shell, CodeMirror core, Claude-powered agent that proposes \u2014 never writes. No Electron.",
   "keywords": [
     "editor",
     "lightweight",

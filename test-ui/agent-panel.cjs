@@ -64,6 +64,30 @@ async function main() {
       "CLI mode: submitted text renders as a user bubble",
       (await page.$eval("#chat .msg.user", (el) => el.textContent)).includes("hello")
     );
+
+    // Model picker offers fable, auto checkbox exists and persists
+    const modelOptions = await page.$$eval("#model option", (opts) => opts.map((o) => o.value));
+    check("model picker includes fable", modelOptions.includes("fable"));
+    check("auto-apply checkbox exists", (await page.$("#auto")) !== null);
+    await page.click("#auto");
+    const autoChecked = await page.$eval("#auto", (el) => el.checked);
+    check("auto checkbox toggles on click", autoChecked === true);
+    const persisted = await page.evaluate(() => localStorage.getItem("fethr.autoApply"));
+    check("auto-apply state persists to localStorage", persisted === "1");
+
+    // Collapsible sidebar: toggle, verify CSS var actually shrinks, and ⌘B works
+    const widthBefore = await page.$eval("aside", (el) => el.getBoundingClientRect().width);
+    await page.click("#toggle-sidebar");
+    const widthAfterClick = await page.$eval("aside", (el) => el.getBoundingClientRect().width);
+    check("sidebar collapses via button (width shrinks)", widthAfterClick < widthBefore - 100);
+    await page.keyboard.down("Meta");
+    await page.keyboard.press("KeyB");
+    await page.keyboard.up("Meta");
+    const widthAfterCmdB = await page.$eval("aside", (el) => el.getBoundingClientRect().width);
+    check("⌘B re-expands the sidebar", widthAfterCmdB > widthAfterClick + 100);
+    const sidebarPersisted = await page.evaluate(() => localStorage.getItem("fethr.sidebarCollapsed"));
+    check("sidebar collapse state persists to localStorage", sidebarPersisted === "0");
+
     await page.close();
   }
 

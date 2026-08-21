@@ -130,10 +130,18 @@ export function serve(root, onReady, opts = {}) {
     else {
       console.log(`\n  fethr — editing ${root}\n  ${urlStr}\n`);
       if (opts.app && process.platform === "darwin") {
-        // Chromeless app-mode window via Chrome/Edge when available.
-        execFile("open", ["-na", "Google Chrome", "--args", `--app=${urlStr}`], (err) => {
-          if (err) execFile("open", [urlStr], () => {});
-        });
+        // Chromeless app-mode window via Chrome/Edge when available. Explicit
+        // --window-size avoids Chrome reusing a stale/tiny remembered size for
+        // the --app profile, which otherwise reads as "the window won't resize"
+        // (it does — dragging edges works — it just started too small to notice).
+        // For a real native window, `npx tauri build` (v0.3) is the better answer;
+        // this stays as the dependency-free fallback for plain `npx fethr`.
+        execFile(
+          "open", ["-na", "Google Chrome", "--args", `--app=${urlStr}`, "--window-size=1100,720"],
+          (err) => {
+            if (err) execFile("open", [urlStr], () => {});
+          }
+        );
       } else {
         const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
         execFile(opener, [urlStr], () => {});

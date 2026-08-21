@@ -50,7 +50,11 @@ function emit(res, obj) {
   res.write(`data: ${JSON.stringify(obj)}\n\n`);
 }
 
-const MODEL_ALIASES = new Set(["opus", "sonnet", "haiku"]);
+// Agent SDK model aliases pass straight through; "fable" isn't a standard
+// alias so it's mapped to the full model ID. Availability isn't detected
+// ahead of time — the panel shows it optimistically and folds gracefully
+// on the first failure (see markFableUnavailable in web/editor.js).
+const MODEL_MAP = { opus: "opus", sonnet: "sonnet", haiku: "haiku", fable: "claude-fable-5" };
 
 async function run(root, { prompt, sessionId, context, model }, req, res) {
   res.writeHead(200, {
@@ -103,7 +107,7 @@ async function run(root, { prompt, sessionId, context, model }, req, res) {
       ],
       includePartialMessages: true,
       ...(sessionId ? { resume: sessionId } : {}),
-      ...(model && MODEL_ALIASES.has(model) ? { model } : {}),
+      ...(model && MODEL_MAP[model] ? { model: MODEL_MAP[model] } : {}),
     },
   });
 

@@ -39,7 +39,8 @@ fethr <dir>     # open a specific directory
 fethr --app     # chromeless app-mode window (via Chrome/Edge when installed)
 ```
 
-⌘S saves. ⌘J toggles the agent panel. That's the manual.
+⌘S saves. ⌘J toggles the agent panel. ⌘B collapses the file sidebar (state persists).
+That's the manual.
 
 ## The agent panel
 
@@ -55,8 +56,12 @@ anything about the project; the current file and selection travel as context aut
   The agent process never touches your disk.
 - **You can see it working:** a live status line (thinking… / tool name / writing…),
   streamed thinking in a collapsible block, per-tool activity with the file or pattern it's
-  touching, a stop button, and a model picker (default / opus / sonnet / haiku — switching
-  starts a fresh conversation). Replies render markdown.
+  touching, a stop button, and a model picker (default / opus / sonnet / haiku / fable 5 —
+  switching starts a fresh conversation; fable folds back to default if your account can't
+  reach it). Replies render markdown.
+- **Auto mode:** check "auto" in the panel header and proposals apply straight to the
+  editor buffer without a manual Accept click — still not written to disk until you ⌘S,
+  still fully undoable with ⌘Z. Off by default; your choice persists locally.
 
 ## The app shell (v0.3)
 

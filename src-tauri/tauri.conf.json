@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "fethr",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "identifier": "dev.fethr.app",
   "build": {
     "frontendDist": "../dist",
@@ -14,7 +14,11 @@
         "title": "fethr",
         "width": 1100,
         "height": 720,
+        "minWidth": 640,
+        "minHeight": 400,
         "resizable": true,
+        "maximizable": true,
+        "minimizable": true,
         "fullscreen": false
       }
     ],

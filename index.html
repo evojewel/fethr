@@ -3,25 +3,26 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>fethr — a featherweight code editor with first-class agent integration</title>
-<meta name="description" content="fethr is a featherweight code editor with first-class AI agent integration — minimal, fast, and built around the agent as a peer process. Under construction.">
+<title>fethr — a featherweight code editor with a first-class agent panel</title>
+<meta name="description" content="fethr is a featherweight code editor with a first-class AI agent panel — the agent reads your workspace and proposes edits you review, never writing to disk on its own. CodeMirror core, no Electron, ~650KB. Alpha.">
 <link rel="canonical" href="https://fethr.dev/">
 <meta property="og:title" content="fethr">
-<meta property="og:description" content="A featherweight code editor with first-class agent integration. Under construction.">
+<meta property="og:description" content="A featherweight code editor with a first-class agent panel. CodeMirror core, no Electron.">
 <meta property="og:url" content="https://fethr.dev/">
 <meta property="og:type" content="website">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="fethr">
-<meta name="twitter:description" content="A featherweight code editor with first-class agent integration.">
+<meta name="twitter:description" content="A featherweight code editor with a first-class agent panel. CodeMirror core, no Electron.">
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
   "@type": "SoftwareApplication",
   "name": "fethr",
   "url": "https://fethr.dev/",
-  "description": "A featherweight code editor with first-class AI agent integration. Under construction.",
+  "description": "A featherweight code editor with a first-class AI agent panel. The agent reads your workspace and proposes edits you review — it never writes to disk on its own. CodeMirror core, no Electron.",
   "applicationCategory": "DeveloperApplication",
   "operatingSystem": "macOS",
+  "softwareVersion": "0.7.0-alpha",
   "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
   "codeRepository": "https://github.com/evojewel/fethr",
   "author": { "@type": "Person", "name": "Jewel Lukose" }
@@ -52,6 +53,7 @@
   }
   a { color: var(--accent); text-decoration: none; font-size: 0.95rem; }
   a:hover { text-decoration: underline; }
+  .links { display: flex; gap: 18px; justify-content: center; flex-wrap: wrap; }
   .status {
     font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.18em;
     color: var(--muted); margin-top: 40px;
@@ -61,11 +63,14 @@
 <body>
 <main>
   <h1>fethr<span>.</span></h1>
-  <p class="tag">A featherweight code editor with first-class agent integration.</p>
+  <p class="tag">A featherweight code editor with a first-class agent panel — it proposes, you decide, it never writes on its own.</p>
   <code>npx @evojewel/fethr@alpha .</code>
-  <br>
-  <a href="https://github.com/evojewel/fethr">github.com/evojewel/fethr</a>
-  <p class="status">alpha — editor · live agent panel (thinking, tools, proposals) · native shell · no electron</p>
+  <br><br>
+  <div class="links">
+    <a href="https://github.com/evojewel/fethr">github.com/evojewel/fethr</a>
+    <a href="https://github.com/evojewel/fethr/releases/latest">download the native app (macOS)</a>
+  </div>
+  <p class="status">alpha — editor · agent panel · native app or npx · no electron</p>
 </main>
 </body>
 </html>

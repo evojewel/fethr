@@ -40,7 +40,7 @@ fethr --app     # chromeless app-mode window (via Chrome/Edge when installed)
 ```
 
 ⌘S saves. ⌘J toggles the agent panel. ⌘B collapses the file sidebar (state persists).
-That's the manual.
+Drag the divider between any two panels to resize — widths persist too. That's the manual.
 
 ## The agent panel
 

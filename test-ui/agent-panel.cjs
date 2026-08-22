@@ -197,6 +197,52 @@ async function main() {
     await page.close();
   }
 
+  // ---- Resizable panels: drag the divider between sidebar/editor/agent ----
+  {
+    const page = await browser.newPage();
+    await page.goto(url, { waitUntil: "domcontentloaded" });
+    const width = async (sel) => page.$eval(sel, (el) => el.getBoundingClientRect().width);
+    const drag = async (handleSel, dx) => {
+      const box = await (await page.$(handleSel)).boundingBox();
+      await page.mouse.move(box.x + 2, box.y + 20);
+      await page.mouse.down();
+      await page.mouse.move(box.x + 2 + dx, box.y + 20, { steps: 5 });
+      await page.mouse.up();
+    };
+
+    const w0 = await width("aside");
+    await drag("#resize-sidebar", 100);
+    const w1 = await width("aside");
+    check("dragging the sidebar resizer grows it", w1 > w0 + 50);
+
+    await page.reload({ waitUntil: "domcontentloaded" });
+    const w2 = await width("aside");
+    check("sidebar width persists across reload", Math.abs(w2 - w1) < 5);
+
+    await page.click("#toggle-sidebar");
+    check("sidebar collapses to a narrow rail", (await width("aside")) < 50);
+    await drag("#resize-sidebar", 60);
+    const wAfter = await width("aside");
+    check("dragging from collapsed un-collapses without a size jump", wAfter > 150 && wAfter < 400);
+
+    check("agent panel takes zero grid width while closed", (await width("#agent")) === 0);
+    await page.click("#toggle-agent");
+    const agentOpenW = await width("#agent");
+    check("agent panel opens to a real width", agentOpenW > 200);
+    await drag("#resize-agent", -80); // agent is on the right — drag left to widen
+    const agentAfterDrag = await width("#agent");
+    check("dragging the agent resizer changes its width", Math.abs(agentAfterDrag - agentOpenW) > 40);
+    await page.click("#toggle-agent");
+    check("agent panel returns to zero width when closed", (await width("#agent")) === 0);
+    await page.click("#toggle-agent");
+    check(
+      "reopening restores the dragged width, not a stale default",
+      Math.abs((await width("#agent")) - agentAfterDrag) < 5
+    );
+
+    await page.close();
+  }
+
   await browser.close();
   process.exit(failures ? 1 : 0);
 }

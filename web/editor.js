@@ -214,6 +214,66 @@ window.addEventListener("keydown", (e) => {
   }
 });
 
+// ---------- resizable panels — drag the divider between sidebar/editor/agent ----------
+
+function makeResizer(handle, { cssVar, min, max, storageKey, beforeStart }) {
+  let startX = 0, startW = 0;
+  const onMove = (e) => {
+    const dx = e.clientX - startX;
+    const w = Math.min(max, Math.max(min, startW + dx));
+    document.documentElement.style.setProperty(cssVar, w + "px");
+  };
+  const onUp = () => {
+    handle.classList.remove("dragging");
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+    const w = parseInt(getComputedStyle(document.documentElement).getPropertyValue(cssVar), 10);
+    try {
+      localStorage.setItem(storageKey, String(w));
+    } catch { /* ignore */ }
+  };
+  handle.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    if (beforeStart) beforeStart();
+    startX = e.clientX;
+    startW = parseInt(getComputedStyle(document.documentElement).getPropertyValue(cssVar), 10) || min;
+    handle.classList.add("dragging");
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  });
+}
+
+makeResizer($("#resize-sidebar"), {
+  cssVar: "--sidebar-w",
+  min: 160,
+  max: 480,
+  storageKey: "fethr.sidebarWidth",
+  // Un-collapse first so the drag starts from a real, visible width — else
+  // the baseline it reads (from :root, unaffected by the collapsed-state
+  // CSS override on body) wouldn't match what's on screen.
+  beforeStart: () => {
+    if (document.body.classList.contains("sidebar-collapsed")) {
+      document.documentElement.style.setProperty("--sidebar-w", "220px");
+      document.body.classList.remove("sidebar-collapsed");
+      syncSidebarIcon();
+    }
+  },
+});
+try {
+  const w = parseInt(localStorage.getItem("fethr.sidebarWidth"), 10);
+  if (w >= 160 && w <= 480) document.documentElement.style.setProperty("--sidebar-w", w + "px");
+} catch { /* ignore */ }
+
+// No restore-on-load here (unlike the sidebar): --agent-w must stay at its
+// 0px default while the panel is closed, or the grid would reserve empty
+// space for it. toggleAgent() reads the saved width at the moment it opens.
+makeResizer($("#resize-agent"), {
+  cssVar: "--agent-w",
+  min: 260,
+  max: 640,
+  storageKey: "fethr.agentWidth",
+});
+
 // ---------- agent panel ----------
 
 let agentSession = null;
@@ -362,8 +422,19 @@ if (!SpeechRec) {
 }
 
 const toggleAgent = () => {
+  const opening = !document.body.classList.contains("agent-open");
   document.body.classList.toggle("agent-open");
-  if (document.body.classList.contains("agent-open")) inputEl.focus();
+  if (opening) {
+    let w = 340;
+    try {
+      const saved = parseInt(localStorage.getItem("fethr.agentWidth"), 10);
+      if (saved >= 260 && saved <= 640) w = saved;
+    } catch { /* ignore */ }
+    document.documentElement.style.setProperty("--agent-w", w + "px");
+    inputEl.focus();
+  } else {
+    document.documentElement.style.setProperty("--agent-w", "0px");
+  }
 };
 $("#toggle-agent").onclick = toggleAgent;
 window.addEventListener("keydown", (e) => {

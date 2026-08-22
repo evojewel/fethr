@@ -8,13 +8,42 @@
 //     editor changes, and the writer saves. The agent never touches disk.
 //
 // Auth: the Agent SDK uses the machine's existing Claude Code login.
+//
+// The Agent SDK's own platform package (e.g. claude-agent-sdk-darwin-arm64)
+// bundles a full copy of the claude binary — 300MB+, since it's the whole
+// harness, not a thin API client. fethr's entire premise is that the user
+// already has Claude Code installed (that's what supplies the login), so
+// the sidecar staging script installs with --omit=optional to skip that
+// bundled copy entirely, and findClaudeExecutable() below points the SDK
+// at the system install instead via pathToClaudeCodeExecutable. Verified:
+// removing the bundled binary and using this option works identically to
+// the SDK's built-in copy — same query(), same tools, same everything.
 
-// Test comment added via the agent panel's propose_edit flow.
-// Second test comment, same flow.
-
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { query, tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
+
+let cachedClaudePath; // computed once per process, not once per request
+function findClaudeExecutable() {
+  if (cachedClaudePath !== undefined) return cachedClaudePath;
+  const home = os.homedir();
+  const candidates = [
+    "/opt/homebrew/bin/claude",
+    "/usr/local/bin/claude",
+    path.join(home, ".claude/local/claude"),
+    path.join(home, ".local/bin/claude"),
+  ];
+  cachedClaudePath = candidates.find((c) => {
+    try {
+      return fs.statSync(c).isFile();
+    } catch {
+      return false;
+    }
+  });
+  return cachedClaudePath;
+}
 
 const RULES = `
 You are the agent panel inside fethr, a featherweight code editor.
@@ -114,6 +143,7 @@ async function run(root, { prompt, sessionId, context, extraFiles, model }, req,
       includePartialMessages: true,
       ...(sessionId ? { resume: sessionId } : {}),
       ...(model && MODEL_MAP[model] ? { model: MODEL_MAP[model] } : {}),
+      ...(findClaudeExecutable() ? { pathToClaudeCodeExecutable: findClaudeExecutable() } : {}),
     },
   });
 

@@ -38,8 +38,11 @@ browser's Web Speech API for hands-free prompting.
 
 A native macOS app shell (Tauri, src-tauri/) provides the same editor including the full
 agent panel: it bundles the Node server as a sidecar and spawns it on launch (needs a
-system Node install; the app locates Homebrew/nvm installs automatically). Bundle size
-is ~360MB due to the Agent SDK. `npx @evojewel/fethr` stays the lightweight option.
+system Node install; the app locates Homebrew/nvm installs automatically). Also needs
+Claude Code installed (fethr's premise: you already have it, for the login) — the
+sidecar skips the Agent SDK's own bundled claude binary (300MB+) via npm's
+--omit=optional and points the SDK at the system install instead. Bundle size: ~55MB,
+not ~360MB. `npx @evojewel/fethr` stays the lightweight, no-native-build option.
 
 ## Links
 

@@ -102,6 +102,13 @@ Unsigned local builds work immediately; distribution builds need code signing.
 `fetch`" — so the package lives under the author scope. The installed command is still
 `fethr`.)
 
+## More docs
+
+- [`CHANGELOG.md`](CHANGELOG.md) — what shipped in each release
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the sidecar pattern, the safety model,
+  and the debugging lessons behind the trickier fixes (worth reading before touching
+  `src-tauri/`, `src/agent.js`, or the DMG build)
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

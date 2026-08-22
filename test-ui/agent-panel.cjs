@@ -128,6 +128,56 @@ async function main() {
     await page.close();
   }
 
+  // ---- Context bar, @-mention attach, mic feature-detect, clickable file:line refs ----
+  {
+    const page = await browser.newPage();
+    await page.goto(url, { waitUntil: "domcontentloaded" });
+    await page.click("#toggle-agent");
+
+    await page.click("#tree .file-row[data-p='app.js']");
+    await page.waitForFunction(() => document.querySelector("#file").textContent.includes("app.js"));
+    check("ctx bar shows the current file", (await page.$eval("#ctx-bar", (el) => el.textContent)).includes("app.js"));
+
+    await page.evaluate(() => {
+      const v = window.__fethrView;
+      v.dispatch({ selection: { anchor: 0, head: v.state.doc.line(1).to } });
+    });
+    check(
+      "ctx bar reflects the live selection",
+      /app\.js:1/.test(await page.$eval("#ctx-bar", (el) => el.textContent))
+    );
+
+    await page.focus("#input");
+    await page.type("#input", "check @util");
+    await page.waitForFunction(() => document.querySelector("#mention-menu").classList.contains("open"));
+    check(
+      "@ shows a filtered mention menu",
+      (await page.$eval("#mention-menu", (el) => el.textContent)).includes("lib/util.js")
+    );
+    await page.keyboard.press("Enter");
+    check("picking a mention clears the @query text", (await page.$eval("#input", (el) => el.value)) === "check ");
+    check(
+      "picked mention becomes a removable context pill",
+      (await page.$eval("#ctx-bar", (el) => el.textContent)).includes("lib/util.js")
+    );
+
+    check("mic button is present and enabled (SpeechRecognition in Chromium)", (await page.$eval("#mic", (el) => el.disabled)) === false);
+
+    await fetch(url + "api/chat", {
+      method: "PUT",
+      body: JSON.stringify({ session: null, entries: [{ type: "assistant", text: "see lib/util.js:1 for the export" }] }),
+    }).catch(() => {});
+    await page.goto(url, { waitUntil: "domcontentloaded" });
+    await page.click("#toggle-agent");
+    await page.waitForSelector("a.fileref", { timeout: 3000 });
+    check("file:line in a reply renders as a clickable link", (await page.$eval("a.fileref", (el) => el.textContent)) === "lib/util.js:1");
+    await page.click("a.fileref");
+    await page.waitForFunction(() => document.querySelector("#file").textContent.includes("util.js"), { timeout: 3000 });
+    check("clicking a file:line ref opens and jumps to it", true);
+
+    await page.close();
+  }
+
   // ---- Chat history persists across a reload (survives the random-port
   // restart scenario since it reads back through the same running server) ----
   {

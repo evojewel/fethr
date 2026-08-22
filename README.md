@@ -62,6 +62,16 @@ anything about the project; the current file and selection travel as context aut
 - **Auto mode:** check "auto" in the panel header and proposals apply straight to the
   editor buffer without a manual Accept click — still not written to disk until you ⌘S,
   still fully undoable with ⌘Z. Off by default; your choice persists locally.
+- **Context is visible, not implicit.** A pill row above the composer shows exactly what's
+  riding along with your next message — the current file (and selection, live, if you've
+  highlighted something) plus anything you've attached. Type `@` to attach any workspace
+  file by name; autocomplete filters as you type, arrow keys navigate, Enter or Tab picks.
+- **File:line references in replies are clickable** — `app.js:42` in the agent's answer
+  jumps the editor straight to that file and line.
+- **Voice input.** The mic button next to the composer does live speech-to-text via the
+  browser's built-in recognizer — no server, no API key. (macOS system dictation, Fn twice,
+  already works in the composer for free either way; the mic button is the explicit,
+  visible alternative with live partial transcription.)
 
 ## The app shell (v0.3, agent parity as of v0.7)
 

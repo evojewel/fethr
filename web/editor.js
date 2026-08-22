@@ -83,6 +83,7 @@ const view = new EditorView({
     extensions: [basicSetup, oneDark, langC.of([])],
   }),
 });
+window.__fethrView = view; // test hook only — direct selection control for automated tests
 
 const extensions = () => [
   basicSetup,
@@ -94,6 +95,7 @@ const extensions = () => [
   ]),
   EditorView.updateListener.of((u) => {
     if (u.docChanged) markDirty(true);
+    if (u.docChanged || u.selectionSet) renderCtxBar();
   }),
 ];
 
@@ -112,6 +114,7 @@ async function openFile(p) {
   document.querySelectorAll("#tree .active").forEach((n) => n.classList.remove("active"));
   const node = document.querySelector(`#tree [data-p="${CSS.escape(p)}"]`);
   if (node) node.classList.add("active");
+  renderCtxBar();
 }
 
 async function save() {
@@ -165,11 +168,15 @@ function renderTree(entries) {
   }
 }
 
+let fileList = [];
+
 async function boot() {
   const meta = await api.meta();
   $("#root").textContent = meta.name;
   document.title = `${meta.name} — fethr`;
-  renderTree(await api.tree());
+  const tree = await api.tree();
+  fileList = tree.filter((n) => !n.dir).map((n) => n.path);
+  renderTree(tree);
   await restoreChat();
 }
 
@@ -214,6 +221,145 @@ let streaming = false;
 
 const chatEl = $("#chat");
 const inputEl = $("#input");
+
+// ---------- context bar — makes what's actually sent to the agent visible ----------
+// The current file + live selection (auto), plus any files attached with @.
+
+let mentions = [];
+
+function renderCtxBar() {
+  const bar = $("#ctx-bar");
+  bar.innerHTML = "";
+  if (current) {
+    const sel = view.state.selection.main;
+    let label = current;
+    if (!sel.empty) {
+      const l1 = view.state.doc.lineAt(sel.from).number;
+      const l2 = view.state.doc.lineAt(sel.to).number;
+      label += l1 === l2 ? `:${l1}` : `:${l1}-${l2}`;
+    }
+    const pill = document.createElement("span");
+    pill.className = "ctx-pill";
+    pill.textContent = label;
+    pill.title = "Current file (and selection, if any) — sent automatically";
+    bar.appendChild(pill);
+  }
+  for (const m of mentions) {
+    const pill = document.createElement("span");
+    pill.className = "ctx-pill mention";
+    pill.title = "Attached file — sent with your next message";
+    pill.appendChild(document.createTextNode(m));
+    const x = document.createElement("button");
+    x.textContent = "×";
+    x.title = "Remove";
+    x.onclick = () => {
+      mentions = mentions.filter((p) => p !== m);
+      renderCtxBar();
+    };
+    pill.appendChild(x);
+    bar.appendChild(pill);
+  }
+}
+
+// ---------- @-mention: attach any workspace file as context ----------
+
+const mentionMenu = $("#mention-menu");
+let mentionMatches = [];
+let mentionSel = -1;
+
+function mentionQueryAt(text, pos) {
+  const upto = text.slice(0, pos);
+  const m = upto.match(/@([\w./-]*)$/);
+  return m ? m[1] : null;
+}
+
+function showMentionMenu(query) {
+  mentionMatches = fileList
+    .filter((p) => p.toLowerCase().includes(query.toLowerCase()))
+    .slice(0, 8);
+  mentionSel = mentionMatches.length ? 0 : -1;
+  if (!mentionMatches.length) return hideMentionMenu();
+  mentionMenu.innerHTML = "";
+  mentionMatches.forEach((p, i) => {
+    const row = document.createElement("div");
+    row.className = "row" + (i === mentionSel ? " sel" : "");
+    row.textContent = p;
+    row.onclick = () => pickMention(i);
+    mentionMenu.appendChild(row);
+  });
+  mentionMenu.classList.add("open");
+}
+
+function hideMentionMenu() {
+  mentionMenu.classList.remove("open");
+  mentionMatches = [];
+  mentionSel = -1;
+}
+
+function pickMention(i) {
+  const p = mentionMatches[i];
+  if (!p) return;
+  const pos = inputEl.selectionStart;
+  const upto = inputEl.value.slice(0, pos);
+  const idx = upto.lastIndexOf("@");
+  inputEl.value = inputEl.value.slice(0, idx) + inputEl.value.slice(pos);
+  inputEl.selectionStart = inputEl.selectionEnd = idx;
+  if (!mentions.includes(p)) mentions.push(p);
+  renderCtxBar();
+  hideMentionMenu();
+  inputEl.focus();
+}
+
+inputEl.addEventListener("input", () => {
+  const q = mentionQueryAt(inputEl.value, inputEl.selectionStart);
+  if (q !== null) showMentionMenu(q);
+  else hideMentionMenu();
+});
+
+// ---------- voice input ----------
+// macOS system dictation (press Fn twice) already works in this field for
+// free, no code needed — this button adds a visible, explicit alternative
+// with live partial transcription, for browsers that support it.
+
+const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+const micBtn = $("#mic");
+if (!SpeechRec) {
+  micBtn.disabled = true;
+  micBtn.title = "Voice input isn't supported in this browser — macOS dictation (press Fn twice) still works here.";
+} else {
+  let recognizing = false;
+  let recog = null;
+  micBtn.onclick = () => {
+    if (recognizing) {
+      recog.stop();
+      return;
+    }
+    const base = inputEl.value ? inputEl.value.replace(/\s+$/, "") + " " : "";
+    recog = new SpeechRec();
+    recog.continuous = true;
+    recog.interimResults = true;
+    recog.onresult = (e) => {
+      let finalText = base, interim = "";
+      for (let i = 0; i < e.results.length; i++) {
+        const r = e.results[i];
+        if (r.isFinal) finalText += r[0].transcript + " ";
+        else interim += r[0].transcript;
+      }
+      inputEl.value = finalText + interim;
+    };
+    recog.onerror = () => {
+      recognizing = false;
+      micBtn.classList.remove("recording");
+    };
+    recog.onend = () => {
+      recognizing = false;
+      micBtn.classList.remove("recording");
+    };
+    recog.start();
+    recognizing = true;
+    micBtn.classList.add("recording");
+  };
+}
 
 const toggleAgent = () => {
   document.body.classList.toggle("agent-open");
@@ -325,14 +471,42 @@ function renderProposal(p) {
   chatEl.scrollTop = chatEl.scrollHeight;
 }
 
-// Minimal safe markdown: escape everything, then fences / inline code / bold.
+// Minimal safe markdown: escape everything, then fences / file:line refs /
+// inline code / bold. File refs run before inline-code so `file.js:12` in
+// backticks (how Claude usually writes them) still becomes clickable; the
+// inline-code regex excludes `<` so it never re-wraps the anchor it made.
 function renderMd(el, raw) {
   const esc = raw.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   let html = esc.replace(/```(\w*)\n([\s\S]*?)```/g, (_, _lang, code) => `<pre>${code}</pre>`);
-  html = html.replace(/`([^`\n]+)`/g, "<code>$1</code>");
+  html = html.replace(/\b([\w./-]+\.\w+):(\d+)(-\d+)?\b/g, (m, p, l1, l2) => {
+    if (!fileList.includes(p) && !fileList.some((f) => f.endsWith("/" + p))) return m;
+    return `<a href="#" class="fileref" data-p="${p}" data-l1="${l1}" data-l2="${l2 ? l2.slice(1) : ""}">${m}</a>`;
+  });
+  html = html.replace(/`([^`\n<]+)`/g, "<code>$1</code>");
   html = html.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
   el.innerHTML = html;
 }
+
+async function jumpToFileRef(p, l1raw, l2raw) {
+  const target = fileList.includes(p) ? p : fileList.find((f) => f.endsWith("/" + p));
+  if (!target) return setStatus(`${p} not in this workspace`);
+  if (target !== current) await openFile(target);
+  const line1 = parseInt(l1raw, 10);
+  const line2 = l2raw ? parseInt(l2raw, 10) : line1;
+  const doc = view.state.doc;
+  if (!(line1 >= 1 && line1 <= doc.lines)) return;
+  const from = doc.line(line1).from;
+  const to = doc.line(Math.min(line2, doc.lines)).to;
+  view.dispatch({ selection: { anchor: from, head: to }, scrollIntoView: true });
+  view.focus();
+}
+
+chatEl.addEventListener("click", (e) => {
+  const a = e.target.closest("a.fileref");
+  if (!a) return;
+  e.preventDefault();
+  jumpToFileRef(a.dataset.p, a.dataset.l1, a.dataset.l2);
+});
 
 // ---------- chat history — persisted to .fethr/chat.json in the workspace ----------
 // A plain project file, not browser storage: it survives across separate
@@ -448,6 +622,13 @@ async function askAgent(prompt) {
       }
     : undefined;
 
+  const attached = mentions.slice();
+  mentions = [];
+  renderCtxBar();
+  const extraFiles = attached.length
+    ? await Promise.all(attached.map(async (p) => ({ path: p, content: await api.read(p).catch(() => "") })))
+    : undefined;
+
   try {
     const r = await fetch("/api/agent", {
       method: "POST",
@@ -457,6 +638,7 @@ async function askAgent(prompt) {
         prompt,
         sessionId: agentSession,
         context,
+        extraFiles,
         model: selectedModel,
       }),
     });
@@ -533,6 +715,24 @@ async function askAgent(prompt) {
 }
 
 inputEl.addEventListener("keydown", (e) => {
+  if (mentionMenu.classList.contains("open")) {
+    if (e.key === "Escape") {
+      hideMentionMenu();
+      e.preventDefault();
+      return;
+    }
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      mentionSel = (mentionSel + (e.key === "ArrowDown" ? 1 : -1) + mentionMatches.length) % mentionMatches.length;
+      [...mentionMenu.children].forEach((r, i) => r.classList.toggle("sel", i === mentionSel));
+      return;
+    }
+    if (e.key === "Enter" || e.key === "Tab") {
+      e.preventDefault();
+      pickMention(mentionSel);
+      return;
+    }
+  }
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
     const t = inputEl.value.trim();

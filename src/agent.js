@@ -59,7 +59,7 @@ function emit(res, obj) {
 // on the first failure (see markFableUnavailable in web/editor.js).
 const MODEL_MAP = { opus: "opus", sonnet: "sonnet", haiku: "haiku", fable: "claude-fable-5" };
 
-async function run(root, { prompt, sessionId, context, model }, req, res) {
+async function run(root, { prompt, sessionId, context, extraFiles, model }, req, res) {
   res.writeHead(200, {
     "content-type": "text/event-stream",
     "cache-control": "no-store",
@@ -95,6 +95,9 @@ async function run(root, { prompt, sessionId, context, model }, req, res) {
   if (context && context.path) {
     fullPrompt += `\n\n<current_file path="${context.path}">\n${context.content ?? ""}\n</current_file>`;
     if (context.selection) fullPrompt += `\n<selection>\n${context.selection}\n</selection>`;
+  }
+  for (const f of extraFiles || []) {
+    fullPrompt += `\n\n<attached_file path="${f.path}">\n${f.content ?? ""}\n</attached_file>`;
   }
 
   const q = query({

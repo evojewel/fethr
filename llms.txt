@@ -30,7 +30,11 @@ in a collapsible block, per-tool activity detail), has a stop button, a model pi
 (default/opus/sonnet/haiku/fable 5 — fable folds back to default if unavailable on the
 account), renders markdown replies, and an auto-apply mode that skips the manual Accept
 click while still requiring an explicit save before anything hits disk. Cmd-B collapses
-the file-tree sidebar.
+the file-tree sidebar. A context pill row above the composer shows exactly what's being
+sent — current file, live selection, and any files attached via @-mention (autocomplete
+against the workspace). File:line references in replies (e.g. app.js:42) render as
+clickable links that jump the editor there. A mic button does live speech-to-text via the
+browser's Web Speech API for hands-free prompting.
 
 A native macOS app shell (Tauri, src-tauri/) provides the same editor including the full
 agent panel: it bundles the Node server as a sidecar and spawns it on launch (needs a

@@ -39,6 +39,10 @@
     color: var(--accent); border-bottom: 1px solid var(--rule); white-space: nowrap;
   }
   aside h1 small { color: var(--muted); font-weight: 400; margin-left: 6px; }
+  aside h1 #branch:not(:empty) {
+    font-family: ui-monospace, Menlo, monospace; font-size: 10px;
+    background: var(--rule); border-radius: 99px; padding: 1px 7px; margin-left: 6px;
+  }
   aside h1 button {
     margin-left: auto; background: none; border: none; color: var(--muted);
     cursor: pointer; font-size: 13px; padding: 2px 6px; border-radius: 4px; line-height: 1;
@@ -200,7 +204,7 @@
 </head>
 <body>
 <aside>
-  <h1><span class="label">fethr<small id="root"></small></span><button id="toggle-sidebar" title="Collapse sidebar (⌘B)">‹</button></h1>
+  <h1><span class="label">fethr<small id="root"></small><small id="branch"></small></span><button id="toggle-sidebar" title="Collapse sidebar (⌘B)">‹</button></h1>
   <div id="tree"></div>
 </aside>
 <div class="resizer sidebar" id="resize-sidebar" title="Drag to resize"></div>

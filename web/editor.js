@@ -169,11 +169,17 @@ function renderTree(entries) {
 }
 
 let fileList = [];
+let gitBranch = null; // real, server-checked — never let the agent guess this
 
 async function boot() {
   const meta = await api.meta();
   $("#root").textContent = meta.name;
   document.title = `${meta.name} — fethr`;
+  gitBranch = meta.gitBranch || null;
+  if (gitBranch) {
+    $("#branch").textContent = gitBranch;
+    $("#branch").title = `git branch: ${gitBranch} (checked, not guessed)`;
+  }
   const tree = await api.tree();
   fileList = tree.filter((n) => !n.dir).map((n) => n.path);
   renderTree(tree);
@@ -710,6 +716,7 @@ async function askAgent(prompt) {
         sessionId: agentSession,
         context,
         extraFiles,
+        gitBranch,
         model: selectedModel,
       }),
     });

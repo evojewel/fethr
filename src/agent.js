@@ -52,7 +52,10 @@ You may read the workspace with Read/Grep/Glob.
 You can NEVER modify files directly. To change a file, call the propose_edit tool with
 the COMPLETE new content of that file — the writer reviews a diff and decides.
 One proposal per file per reply. Keep answers short and concrete; this is a side panel,
-not a chat site.`;
+not a chat site.
+If the prompt includes a <git_branch> tag, that is the real, checked branch — state it
+plainly. If it's absent, you do not know the branch (you have no Bash tool to check it
+yourself) — say you don't have that information rather than guessing one.`;
 
 export function handleAgent(root, req, res) {
   let body = "";
@@ -88,7 +91,7 @@ function emit(res, obj) {
 // on the first failure (see markFableUnavailable in web/editor.js).
 const MODEL_MAP = { opus: "opus", sonnet: "sonnet", haiku: "haiku", fable: "claude-fable-5" };
 
-async function run(root, { prompt, sessionId, context, extraFiles, model }, req, res) {
+async function run(root, { prompt, sessionId, context, extraFiles, gitBranch, model }, req, res) {
   res.writeHead(200, {
     "content-type": "text/event-stream",
     "cache-control": "no-store",
@@ -121,6 +124,7 @@ async function run(root, { prompt, sessionId, context, extraFiles, model }, req,
   });
 
   let fullPrompt = prompt;
+  if (gitBranch) fullPrompt += `\n\n<git_branch>${gitBranch}</git_branch>`;
   if (context && context.path) {
     fullPrompt += `\n\n<current_file path="${context.path}">\n${context.content ?? ""}\n</current_file>`;
     if (context.selection) fullPrompt += `\n<selection>\n${context.selection}\n</selection>`;

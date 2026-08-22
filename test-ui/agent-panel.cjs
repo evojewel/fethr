@@ -243,6 +243,32 @@ async function main() {
     await page.close();
   }
 
+  // ---- Git branch: shown when real, never guessed when absent ----
+  // Regression coverage for a real bug: the agent once answered a branch
+  // question with zero tool calls (see src/server.js's getGitBranch comment)
+  // — fethr now checks the real branch itself rather than trusting a guess.
+  {
+    const { execSync } = require("node:child_process");
+    const gitFixture = fs.mkdtempSync(path.join(os.tmpdir(), "fethr-git-test-"));
+    execSync("git init -q -b test-branch-xyz", { cwd: gitFixture });
+    execSync('git -c user.email=t@t -c user.name=t commit --allow-empty -q -m init', { cwd: gitFixture });
+    fs.writeFileSync(path.join(gitFixture, "app.js"), "1\n");
+
+    const gitUrl = await new Promise((resolve) => serve(gitFixture, resolve));
+    const page = await browser.newPage();
+    await page.goto(gitUrl, { waitUntil: "domcontentloaded" });
+    check("real branch name shown in the sidebar header", (await page.$eval("#branch", (el) => el.textContent)) === "test-branch-xyz");
+
+    const meta = await (await fetch(gitUrl + "api/meta")).json();
+    check("/api/meta reports the real branch", meta.gitBranch === "test-branch-xyz");
+
+    const nonGitUrl = await new Promise((resolve) => serve(fixture, resolve));
+    const metaNonGit = await (await fetch(nonGitUrl + "api/meta")).json();
+    check("non-git workspace reports null, not an error", metaNonGit.gitBranch === null);
+
+    await page.close();
+  }
+
   await browser.close();
   process.exit(failures ? 1 : 0);
 }

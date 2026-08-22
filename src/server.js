@@ -6,12 +6,35 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 
 const DIST = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "dist");
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", "__pycache__", "env", "venv"]);
 const MAX_TREE_ENTRIES = 5000;
+
+// fethr never explicitly told the agent the branch, but it answered a
+// branch question anyway — turns out the Claude Code harness itself
+// captures a git-status snapshot at session start, independent of anything
+// fethr sends. That's real, but it's a snapshot: it goes stale if the
+// branch changes mid-conversation (session resume, checkout in another
+// window). Giving the agent a freshly-checked branch on every request is
+// strictly better — same "separate verified fact from inference" principle
+// the rest of this project already follows for its own outputs.
+function getGitBranch(root) {
+  try {
+    // stdio[2]: discard stderr — git's "fatal: not a git repository" on
+    // every non-git workspace (test fixtures, scratch folders) is the
+    // normal, expected case here, not something to surface as noise.
+    return execFileSync("git", ["branch", "--show-current"], {
+      cwd: root,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim() || null;
+  } catch {
+    return null; // not a git repo, git not installed, detached HEAD w/ no name, etc.
+  }
+}
 
 function safeJoin(root, rel) {
   const p = path.resolve(root, rel);
@@ -73,7 +96,7 @@ export function serve(root, onReady, opts = {}) {
       return send(res, 200, fs.readFileSync(path.join(DIST, "editor.js")), "text/javascript; charset=utf-8");
     }
     if (req.method === "GET" && u.pathname === "/api/meta") {
-      return send(res, 200, JSON.stringify({ root, name: path.basename(root) }));
+      return send(res, 200, JSON.stringify({ root, name: path.basename(root), gitBranch: getGitBranch(root) }));
     }
     if (u.pathname === "/api/chat") {
       // Conversation history lives with the project, not the browser — a

@@ -269,6 +269,72 @@ async function main() {
     await page.close();
   }
 
+  // ---- Security hardening: symlink escape, XSS, replay, autosave boundary ----
+  // Regression coverage for a real external security review — every one of
+  // these was a genuine bug, verified against source before fixing.
+  {
+    const secFixture = fs.mkdtempSync(path.join(os.tmpdir(), "fethr-sec-test-"));
+    fs.writeFileSync(path.join(secFixture, "app.js"), "x = 1");
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "fethr-sec-outside-"));
+    fs.writeFileSync(path.join(outside, "secret.txt"), "secret outside content");
+    fs.symlinkSync(outside, path.join(secFixture, "escape-link"));
+
+    const secUrl = await new Promise((resolve) => serve(secFixture, resolve));
+
+    const r1 = await fetch(secUrl + "api/file?p=" + encodeURIComponent("escape-link/secret.txt"));
+    const body1 = await r1.json().catch(() => ({}));
+    check("symlink escaping the workspace is rejected", r1.status === 400 && body1.error === "path escapes root");
+
+    await fetch(secUrl + "api/chat", {
+      method: "PUT",
+      body: JSON.stringify({
+        session: null,
+        entries: [{ type: "proposal", path: "app.js", content: "x = 2", note: "<img src=x onerror=window.__xss=true>" }],
+      }),
+    });
+    const page = await browser.newPage();
+    await page.goto(secUrl, { waitUntil: "domcontentloaded" });
+    await page.click("#toggle-agent");
+    await page.waitForSelector(".proposal", { timeout: 3000 });
+    check("XSS payload in a proposal note did not execute", (await page.evaluate(() => window.__xss)) !== true);
+    check(
+      "proposal note rendered as literal text, not parsed HTML",
+      (await page.$eval(".proposal .phead", (el) => el.textContent)).includes("<img")
+    );
+
+    await page.click("#auto"); // simulate Auto having been left on from a prior session
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.click("#toggle-agent");
+    await page.waitForSelector(".proposal", { timeout: 3000 });
+    check(
+      "restored proposal shows manual Accept/Reject, not auto-applied",
+      (await page.$eval(".proposal .pactions", (el) => el.textContent)).includes("Accept")
+    );
+    check(
+      "restored proposal did not write to disk on its own",
+      fs.readFileSync(path.join(secFixture, "app.js"), "utf8") === "x = 1"
+    );
+
+    await page.click(".proposal .accept");
+    await page.waitForFunction(() => document.querySelector("#file").textContent.includes("•"), { timeout: 3000 });
+    await new Promise((r) => setTimeout(r, 1200)); // longer than the 800ms autosave debounce
+    check(
+      "accepting a proposal does not autosave — the disk boundary holds",
+      fs.readFileSync(path.join(secFixture, "app.js"), "utf8") === "x = 1"
+    );
+    await page.focus(".cm-content");
+    await page.keyboard.down("Meta");
+    await page.keyboard.press("KeyS");
+    await page.keyboard.up("Meta");
+    await page.waitForFunction(() => document.querySelector("#status").textContent === "saved", { timeout: 3000 });
+    check(
+      "explicit ⌘S still saves the accepted change",
+      fs.readFileSync(path.join(secFixture, "app.js"), "utf8") === "x = 2"
+    );
+
+    await page.close();
+  }
+
   await browser.close();
   process.exit(failures ? 1 : 0);
 }

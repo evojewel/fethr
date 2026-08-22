@@ -12,8 +12,23 @@ npx @evojewel/fethr@alpha .     # open the current directory in the editor
 
 fethr starts a local server bound to 127.0.0.1 and opens your browser — the rendering
 engine your OS already ships — as the shell. No Electron, no app download. The editor core
-is CodeMirror 6 (JS/TS, Python, Markdown, HTML, CSS, JSON highlighting), ~650 KB total.
-File access is confined to the directory you launch with; nothing leaves your machine.
+itself is CodeMirror 6 (JS/TS, Python, Markdown, HTML, CSS, JSON highlighting), ~650 KB —
+that's the code that actually runs the editor. File access is confined to the directory
+you launch with. **The editor itself makes no network calls — but the agent panel does:**
+the current file, your selection, and anything you `@`-attach are sent to Anthropic's API
+when you use it (via your existing Claude Code login), same as using Claude Code directly.
+Don't use the agent panel on files you don't want leaving your machine.
+
+**Honest note on `npx`'s first-run weight:** the ~650 KB above is the editor; it isn't the
+size of what `npx` downloads. `@anthropic-ai/claude-agent-sdk` ships its own copy of the
+`claude` binary as an npm `optionalDependency` (~300 MB) — the native app avoids this by
+controlling its own install command (`--omit=optional`, see below), but there's no
+supported way for a package to make a *downstream* `npx`/`npm install` skip its own
+optionalDependencies (npm deliberately strips things like `.npmrc` from published
+packages so one package can't silently alter another's install config — verified by
+trying it and checking the actual packed tarball, not assuming). So: **first `npx` run
+pulls the full SDK, npx caches it after that** — a one-time cost, not a per-run one, but
+real and worth knowing before you judge "featherweight" by that first download.
 
 ## The idea
 

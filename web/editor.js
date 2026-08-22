@@ -60,10 +60,14 @@ function scheduleAutoSave() {
   }, 800);
 }
 
-const markDirty = (d) => {
+// skipAutosave=true for agent-driven changes (accepted/auto-applied
+// proposals): the "not written to disk until you ⌘S" boundary has to hold
+// regardless of the auto-save setting, or it isn't a real boundary. Plain
+// typing (the normal case) still autosaves as usual.
+const markDirty = (d, skipAutosave) => {
   dirty = d;
   $("#file").textContent = current ? current + (d ? " •" : "") : "no file open";
-  if (d) scheduleAutoSave();
+  if (d && !skipAutosave) scheduleAutoSave();
 };
 
 try {
@@ -85,6 +89,11 @@ const view = new EditorView({
 });
 window.__fethrView = view; // test hook only — direct selection control for automated tests
 
+// Set right before an agent-driven dispatch (applyProposal) so the change
+// listener below — which fires for every dispatch, ours or the user's own
+// typing — knows this particular one shouldn't schedule an autosave.
+let suppressAutosaveOnce = false;
+
 const extensions = () => [
   basicSetup,
   oneDark,
@@ -94,18 +103,26 @@ const extensions = () => [
     { key: "Mod-s", preventDefault: true, run: () => (save(), true) },
   ]),
   EditorView.updateListener.of((u) => {
-    if (u.docChanged) markDirty(true);
+    if (u.docChanged) {
+      markDirty(true, suppressAutosaveOnce);
+      suppressAutosaveOnce = false;
+    }
     if (u.docChanged || u.selectionSet) renderCtxBar();
   }),
 ];
 
 async function openFile(p) {
-  if (dirty && !confirm(`Discard unsaved changes in ${current}?`)) return;
+  // Returns true iff `current` now genuinely points at `p` — callers that
+  // go on to overwrite the buffer (applyProposal) must check this rather
+  // than assume, or a proposal for a nonexistent/unreadable path would
+  // silently overwrite whatever file happened to be open before it.
+  if (dirty && !confirm(`Discard unsaved changes in ${current}?`)) return false;
   let content;
   try {
     content = await api.read(p);
   } catch {
-    return setStatus(`could not open ${p}`);
+    setStatus(`could not open ${p}`);
+    return false;
   }
   current = p;
   view.setState(EditorState.create({ doc: content, extensions: extensions() }));
@@ -115,6 +132,7 @@ async function openFile(p) {
   const node = document.querySelector(`#tree [data-p="${CSS.escape(p)}"]`);
   if (node) node.classList.add("active");
   renderCtxBar();
+  return true;
 }
 
 async function save() {
@@ -487,17 +505,29 @@ function lineDiff(a, b) {
 }
 
 async function applyProposal(p) {
-  if (p.path !== current) await openFile(p.path);
+  if (p.path !== current) {
+    const opened = await openFile(p.path);
+    if (!opened) {
+      setStatus(`proposal for ${p.path} not applied — couldn't open that file`);
+      return false;
+    }
+  }
+  suppressAutosaveOnce = true;
   view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: p.content } });
-  markDirty(true);
+  markDirty(true, true); // belt-and-suspenders in case the dispatch above didn't fire docChanged
 }
 
-function renderProposal(p) {
+function renderProposal(p, opts = {}) {
+  const { live = false } = opts; // live=false for proposals redisplayed from chat history — never auto-applied
   const box = document.createElement("div");
   box.className = "proposal";
   const head = document.createElement("div");
   head.className = "phead";
-  head.innerHTML = `<b>propose_edit</b> ${p.path}${p.note ? " — " + p.note : ""}`;
+  // p.path/p.note come from the agent's tool call — never trust them as HTML.
+  const b = document.createElement("b");
+  b.textContent = "propose_edit";
+  head.appendChild(b);
+  head.appendChild(document.createTextNode(" " + p.path + (p.note ? " — " + p.note : "")));
   box.appendChild(head);
 
   const pre = document.createElement("pre");
@@ -524,10 +554,18 @@ function renderProposal(p) {
   const actions = document.createElement("div");
   actions.className = "pactions";
 
-  if ($("#auto").checked) {
-    applyProposal(p);
-    actions.textContent = "auto-applied — review and ⌘S to save";
+  if (live && $("#auto").checked) {
+    actions.textContent = "applying…";
+    applyProposal(p).then((ok) => {
+      actions.textContent = ok === false ? "couldn't apply — file not found" : "auto-applied — review and ⌘S to save";
+    });
   } else {
+    if (!live) {
+      const note = document.createElement("div");
+      note.className = "pnote";
+      note.textContent = "from an earlier session — review before applying";
+      box.appendChild(note); // appended before `actions` below, so it lands between diff and buttons
+    }
     const accept = document.createElement("button");
     accept.className = "accept";
     accept.textContent = "Accept";
@@ -537,8 +575,8 @@ function renderProposal(p) {
       actions.textContent = label;
     };
     accept.onclick = async () => {
-      await applyProposal(p);
-      done("accepted — review and ⌘S to save");
+      const ok = await applyProposal(p);
+      done(ok === false ? "couldn't apply — file not found" : "accepted — review and ⌘S to save");
     };
     reject.onclick = () => done("rejected");
     actions.append(accept, reject);
@@ -597,7 +635,11 @@ function persistChat() {
   api.saveChat({ session: agentSession, entries: transcript });
 }
 
-function renderEntry(entry) {
+// live=true only for entries just received over the live SSE stream (via
+// recordAndAdd). Entries replayed by restoreChat() are always live=false —
+// a proposal must never auto-apply itself just because it's being
+// redisplayed and the Auto checkbox happens to be on right now.
+function renderEntry(entry, live = false) {
   if (entry.type === "user") return addMsg("user", "you", entry.text);
   if (entry.type === "assistant") {
     const el = addMsg("assistant", "agent", "");
@@ -613,13 +655,13 @@ function renderEntry(entry) {
     return box;
   }
   if (entry.type === "tool") return addMsg("tool", null, entry.text);
-  if (entry.type === "proposal") return renderProposal(entry);
+  if (entry.type === "proposal") return renderProposal(entry, { live });
 }
 
 function recordAndAdd(entry) {
   transcript.push(entry);
   persistChat();
-  return renderEntry(entry);
+  return renderEntry(entry, true);
 }
 
 async function restoreChat() {
@@ -628,7 +670,7 @@ async function restoreChat() {
   agentSession = saved.session || null;
   for (const e of saved.entries) {
     transcript.push(e);
-    renderEntry(e);
+    renderEntry(e); // live defaults false
   }
   addMsg("tool", null, "— restored earlier conversation —");
 }

@@ -39,6 +39,26 @@ function getGitBranch(root) {
 function safeJoin(root, rel) {
   const p = path.resolve(root, rel);
   if (p !== root && !p.startsWith(root + path.sep)) return null;
+
+  // path.resolve is purely lexical — a symlink *inside* root whose target
+  // points outside root passes the check above while actually reading/
+  // writing outside the workspace. Resolve symlinks and re-check the real
+  // location (mirrors safe_join's use of .canonicalize() on the Rust side
+  // in src-tauri/src/lib.rs — the two implementations had drifted).
+  let real;
+  try {
+    real = fs.realpathSync(p);
+  } catch {
+    // Doesn't exist yet (e.g. saving a new file) — validate the nearest
+    // existing ancestor instead.
+    try {
+      real = path.join(fs.realpathSync(path.dirname(p)), path.basename(p));
+    } catch {
+      return null;
+    }
+  }
+  const realRoot = fs.realpathSync(root);
+  if (real !== realRoot && !real.startsWith(realRoot + path.sep)) return null;
   return p;
 }
 

@@ -20,15 +20,20 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_dialog::DialogExt;
 
 struct Sidecar(Mutex<Option<Child>>);
 
-fn resolve_root() -> PathBuf {
-    std::env::args()
-        .nth(1)
-        .map(PathBuf::from)
-        .filter(|p| p.is_dir())
-        .unwrap_or_else(|| std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/")))
+// A CLI arg (`open fethr.app --args <dir>`) is one legitimate way in. But a
+// double-click from Finder — the normal way anyone downloading the DMG
+// launches it — passes no argument at all, and the previous version of
+// this function silently fell back to $HOME. That's a bad default for a
+// downloadable GUI app: the agent's Read/Grep/Glob tools would get the
+// user's entire home directory as their scope (SSH key parent dirs, other
+// projects, everything) with zero indication that happened. None is now
+// the honest answer when there's no arg — the caller must ask.
+fn resolve_root_from_args() -> Option<PathBuf> {
+    std::env::args().nth(1).map(PathBuf::from).filter(|p| p.is_dir())
 }
 
 // GUI-launched apps on macOS get launchd's bare-bones PATH, not the shell
@@ -120,14 +125,59 @@ fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
+fn show_message(app: &tauri::AppHandle, title: &str, msg: &str) -> tauri::Result<()> {
+    let html = format!(
+        "data:text/html,<body style='font-family:-apple-system,sans-serif;\
+         background:#101312;color:#e8ece9;padding:32px;white-space:pre-wrap'>{}</body>",
+        html_escape(msg)
+    );
+    WebviewWindowBuilder::new(app, "message", WebviewUrl::External(html.parse().expect("valid data url")))
+        .title(title)
+        .inner_size(560.0, 320.0)
+        .build()?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let root = resolve_root();
+    let cli_root = resolve_root_from_args();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(Sidecar(Mutex::new(None)))
         .setup(move |app| {
             let resource_dir = app.path().resource_dir().expect("resource dir");
+
+            let root = match cli_root.clone() {
+                Some(r) => r,
+                None => {
+                    // No CLI arg — the normal case for a Finder double-click.
+                    // Ask, rather than silently defaulting to $HOME.
+                    match app.dialog().file().blocking_pick_folder() {
+                        Some(picked) => match picked.into_path() {
+                            Ok(p) => p,
+                            Err(_) => {
+                                show_message(
+                                    app.handle(),
+                                    "fethr",
+                                    "Couldn't resolve the folder you picked.",
+                                )?;
+                                return Ok(());
+                            }
+                        },
+                        None => {
+                            // User closed the picker without choosing — exit
+                            // quietly rather than open anything by default.
+                            show_message(
+                                app.handle(),
+                                "fethr",
+                                "fethr needs a folder to open.\n\nRelaunch and choose one, or run it from Terminal with a path: fethr.app --args <folder>",
+                            )?;
+                            return Ok(());
+                        }
+                    }
+                }
+            };
 
             match spawn_sidecar(&resource_dir, &root) {
                 Ok((child, url)) => {
@@ -151,15 +201,7 @@ pub fn run() {
                          The agent-enabled app shell needs Node.js on PATH (node). \
                          Install it from nodejs.org, or run `npx @evojewel/fethr` instead."
                     );
-                    let html = format!(
-                        "data:text/html,<body style='font-family:-apple-system,sans-serif;\
-                         background:#101312;color:#e8ece9;padding:32px;white-space:pre-wrap'>{}</body>",
-                        html_escape(&msg)
-                    );
-                    WebviewWindowBuilder::new(app, "main", WebviewUrl::External(html.parse().expect("valid data url")))
-                        .title("fethr — couldn't start")
-                        .inner_size(560.0, 320.0)
-                        .build()?;
+                    show_message(app.handle(), "fethr — couldn't start", &msg)?;
                 }
             }
             Ok(())

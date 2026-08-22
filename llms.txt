@@ -42,7 +42,10 @@ system Node install; the app locates Homebrew/nvm installs automatically). Also 
 Claude Code installed (fethr's premise: you already have it, for the login) — the
 sidecar skips the Agent SDK's own bundled claude binary (300MB+) via npm's
 --omit=optional and points the SDK at the system install instead. Bundle size: ~55MB,
-not ~360MB. `npx @evojewel/fethr` stays the lightweight, no-native-build option.
+not ~360MB. The npx path can't apply the same fix (npm has no supported mechanism for a
+package to make a downstream install skip its own optionalDependencies), so first-time
+`npx @evojewel/fethr` still pulls the SDK's full ~360MB — a one-time cost npx caches after.
+The editor code itself is ~650KB; that number describes the editor, not the npx download.
 
 ## Links
 

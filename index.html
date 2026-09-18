@@ -4,73 +4,225 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>fethr — a featherweight code editor with a first-class agent panel</title>
-<meta name="description" content="fethr is a featherweight code editor with a first-class AI agent panel — the agent reads your workspace and proposes edits you review, never writing to disk on its own. CodeMirror core, no Electron, ~650KB. Alpha.">
+<meta name="description" content="fethr is a featherweight code editor with a first-class AI agent panel. The agent reads your project and proposes edits as diffs you accept in the editor; the agent process never touches your disk. CodeMirror core, your browser as the shell, no Electron. Alpha.">
 <link rel="canonical" href="https://fethr.dev/">
-<meta property="og:title" content="fethr">
-<meta property="og:description" content="A featherweight code editor with a first-class agent panel. CodeMirror core, no Electron.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23101312'/%3E%3Ccircle cx='16' cy='16' r='6' fill='%236fd3b2'/%3E%3C/svg%3E">
+<meta property="og:title" content="fethr — a featherweight code editor with a first-class agent panel">
+<meta property="og:description" content="The agent reads your project and proposes edits as diffs you accept in the editor. CodeMirror core, no Electron, about 660 KB of editor.">
 <meta property="og:url" content="https://fethr.dev/">
 <meta property="og:type" content="website">
-<meta name="twitter:card" content="summary">
+<meta property="og:image" content="https://fethr.dev/assets/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The fethr editor: a file tree, a JavaScript file open, and the agent panel showing a proposed diff with Accept and Reject buttons.">
+<meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="fethr">
-<meta name="twitter:description" content="A featherweight code editor with a first-class agent panel. CodeMirror core, no Electron.">
+<meta name="twitter:description" content="A featherweight code editor with a first-class agent panel. The agent proposes edits as diffs; you accept them in the editor.">
+<meta name="twitter:image" content="https://fethr.dev/assets/og.png">
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
   "@type": "SoftwareApplication",
   "name": "fethr",
   "url": "https://fethr.dev/",
-  "description": "A featherweight code editor with a first-class AI agent panel. The agent reads your workspace and proposes edits you review — it never writes to disk on its own. CodeMirror core, no Electron.",
+  "description": "A featherweight code editor with a first-class AI agent panel. The agent reads your project and proposes edits as diffs you accept in the editor; the agent process never touches your disk. CodeMirror core, no Electron.",
   "applicationCategory": "DeveloperApplication",
   "operatingSystem": "macOS",
-  "softwareVersion": "0.7.0-alpha",
+  "softwareVersion": "0.9.3-alpha",
+  "releaseNotes": "https://github.com/evojewel/fethr/blob/main/CHANGELOG.md",
+  "downloadUrl": "https://github.com/evojewel/fethr/releases/download/v0.9.3-alpha/fethr_0.9.3_aarch64.dmg",
+  "installUrl": "https://www.npmjs.com/package/@evojewel/fethr",
+  "screenshot": "https://fethr.dev/assets/og.png",
+  "license": "https://github.com/evojewel/fethr/blob/main/LICENSE",
   "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
   "codeRepository": "https://github.com/evojewel/fethr",
   "author": { "@type": "Person", "name": "Jewel Lukose" }
 }
 </script>
 <style>
-  :root { --bg: #101312; --ink: #e8ece9; --muted: #8fa098; --accent: #6fd3b2; }
-  @media (prefers-color-scheme: light) {
-    :root { --bg: #f7f9f8; --ink: #17211d; --muted: #5c6d64; --accent: #0e7a58; }
+  /* Palette is the editor's own (web/index.html), used the other way round:
+     the page is light so the one dark object on it is the product itself.
+     No web fonts and no JavaScript on purpose — the pitch is weight. */
+  :root {
+    --bg: #f5f8f6; --ink: #17211d; --muted: #5c6d64; --accent: #0e7a58;
+    --rule: #d8e1dc; --panel: #101312; --panel-ink: #e8ece9; --panel-muted: #8fa098;
+    --shadow: 0 30px 60px -30px rgba(23, 33, 29, .45);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #101312; --ink: #e8ece9; --muted: #8fa098; --accent: #6fd3b2;
+      --rule: #242a27; --panel: #161a18; --shadow: none;
+    }
   }
   * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
   body {
-    margin: 0; min-height: 100vh; display: grid; place-items: center;
-    background: var(--bg); color: var(--ink);
-    font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+    margin: 0; padding: 0 20px; background: var(--bg); color: var(--ink);
+    font: 17px/1.55 -apple-system, "Segoe UI", system-ui, sans-serif;
   }
-  main { text-align: center; padding: 32px; max-width: 560px; }
+  .wrap { max-width: 1040px; margin: 0 auto; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  a:focus-visible, .dl:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+  code, kbd, .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  kbd { font-size: .85em; padding: 0 .35em; border: 1px solid var(--rule); border-radius: 4px; color: var(--ink); }
+
+  /* hero */
+  header { padding: 40px 0 8px; }
+  nav { display: flex; gap: 22px; font-size: .95rem; }
   h1 {
-    font-size: 4rem; margin: 0 0 8px; font-weight: 300; letter-spacing: 0.04em;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: clamp(3.6rem, 11vw, 6.5rem); font-weight: 500; letter-spacing: -0.03em;
+    line-height: 1; margin: 56px 0 18px;
   }
   h1 span { color: var(--accent); }
-  p.tag { font-size: 1.15rem; color: var(--muted); margin: 0 0 28px; line-height: 1.5; }
-  code {
-    display: inline-block; font-family: ui-monospace, "SF Mono", Menlo, monospace;
-    font-size: 0.95rem; color: var(--ink);
-    border: 1px solid var(--muted); border-radius: 8px; padding: 10px 18px;
-    margin-bottom: 28px;
+  .tag { font-size: clamp(1.25rem, 2.6vw, 1.6rem); line-height: 1.3; margin: 0 0 12px; max-width: 30ch; }
+  .lede { font-size: 1.08rem; color: var(--muted); margin: 0 0 30px; max-width: 58ch; }
+  .get { display: flex; flex-wrap: wrap; gap: 14px 18px; align-items: stretch; }
+  .cmd {
+    display: inline-flex; align-items: center; gap: 12px;
+    background: var(--panel); color: var(--panel-ink); border-radius: 10px; padding: 13px 18px;
+    font-size: 1rem; white-space: nowrap; overflow-x: auto; max-width: 100%;
   }
-  a { color: var(--accent); text-decoration: none; font-size: 0.95rem; }
-  a:hover { text-decoration: underline; }
-  .links { display: flex; gap: 18px; justify-content: center; flex-wrap: wrap; }
-  .status {
-    font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.18em;
-    color: var(--muted); margin-top: 40px;
+  .cmd .prompt { color: var(--panel-muted); }
+  .cmd code { user-select: all; }
+  .dl {
+    display: inline-flex; flex-direction: column; justify-content: center; gap: 1px;
+    border: 1.5px solid var(--accent); border-radius: 10px; padding: 8px 18px;
+    color: var(--accent); font-weight: 600; line-height: 1.25;
+  }
+  .dl:hover { text-decoration: none; background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  .dl small { font-weight: 400; color: var(--muted); font-size: .8rem; }
+  .fine { font-size: .9rem; color: var(--muted); margin: 16px 0 0; max-width: 60ch; }
+
+  /* the shot */
+  figure.shot { margin: 40px 0 0; }
+  figure.shot img {
+    display: block; width: 100%; height: auto; border-radius: 12px;
+    border: 1px solid var(--rule); box-shadow: var(--shadow); background: var(--panel);
+  }
+  figcaption { font-size: .9rem; color: var(--muted); margin: 14px 0 0; max-width: 78ch; }
+
+  /* sections */
+  section { padding-top: 60px; }
+  h2 { font-size: 1.35rem; font-weight: 650; margin: 0 0 20px; }
+  .cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: 30px; }
+  .cols h3 { font-size: 1.05rem; font-weight: 650; margin: 0 0 6px; }
+  .cols p { margin: 0; color: var(--muted); font-size: 1rem; }
+  ul.list { columns: 2; column-gap: 40px; padding-left: 1.1em; margin: 0; }
+  ul.list li { break-inside: avoid; margin: 0 0 12px; color: var(--muted); font-size: 1rem; }
+  ul.list b { color: var(--ink); font-weight: 600; }
+  .ledger { margin: 0; font-size: .95rem; }
+  .ledger > div { display: flex; align-items: baseline; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--rule); }
+  .ledger dt { flex: 1; display: flex; align-items: baseline; gap: 12px; white-space: nowrap; }
+  .ledger dt::after { content: ""; flex: 1; border-bottom: 1px dotted var(--muted); opacity: .5; transform: translateY(-.35em); }
+  .ledger dd { margin: 0; text-align: right; display: flex; flex-direction: column; align-items: flex-end; max-width: 60%; }
+  .ledger dd small { font-family: -apple-system, "Segoe UI", system-ui, sans-serif; font-size: .82rem; color: var(--muted); }
+  .before p { margin: 0 0 12px; color: var(--muted); max-width: 72ch; }
+  .before p b { color: var(--ink); font-weight: 600; }
+
+  footer {
+    margin: 70px 0 44px; padding-top: 22px; border-top: 1px solid var(--rule);
+    color: var(--muted); font-size: .9rem; display: flex; flex-wrap: wrap; gap: 8px 22px;
+  }
+  footer .spacer { flex: 1; }
+
+  @media (max-width: 720px) {
+    header { padding-top: 28px; }
+    h1 { margin-top: 40px; }
+    .cols { grid-template-columns: 1fr; gap: 22px; }
+    ul.list { columns: 1; }
+    .ledger > div { flex-direction: column; align-items: stretch; gap: 4px; }
+    .ledger dd { max-width: 100%; align-items: flex-start; text-align: left; }
+    section { padding-top: 48px; }
   }
 </style>
 </head>
 <body>
-<main>
-  <h1>fethr<span>.</span></h1>
-  <p class="tag">A featherweight code editor with a first-class agent panel.</p>
-  <code>npx @evojewel/fethr@alpha .</code>
-  <br><br>
-  <div class="links">
-    <a href="https://github.com/evojewel/fethr">github.com/evojewel/fethr</a>
-    <a href="https://github.com/evojewel/fethr/releases/latest">download the native app (macOS)</a>
+<div class="wrap">
+
+<header>
+  <nav aria-label="Project links">
+    <a href="https://github.com/evojewel/fethr">GitHub</a>
+    <a href="https://www.npmjs.com/package/@evojewel/fethr">npm</a>
+    <a href="https://github.com/evojewel/fethr/blob/main/CHANGELOG.md">Changelog</a>
+  </nav>
+  <h1>fethr<span aria-hidden="true">.</span></h1>
+  <p class="tag">A featherweight code editor with a first&#8209;class agent panel.</p>
+  <p class="lede">The agent reads your project and proposes edits as diffs. You accept them in the editor, where <kbd>⌘Z</kbd> still works. The agent process never touches your disk.</p>
+  <div class="get">
+    <div class="cmd"><span class="prompt" aria-hidden="true">$</span><code>npx @evojewel/fethr@alpha .</code></div>
+    <a class="dl" href="https://github.com/evojewel/fethr/releases/download/v0.9.3-alpha/fethr_0.9.3_aarch64.dmg">Download for macOS<small>0.9.3-alpha · Apple Silicon · 40 MB</small></a>
   </div>
-  <p class="status">alpha — editor · agent panel · native app or npx · no electron</p>
+  <p class="fine">Either way you need Node 18 or newer and a Claude Code login on the machine. Details under <a href="#before">before you run it</a>.</p>
+</header>
+
+<figure class="shot">
+  <img src="assets/editor.webp" width="1360" height="820" alt="The fethr editor with three panels: a file tree on the left showing the fethr repository on branch main, bin/fethr.js open in the middle, and the agent panel on the right. The agent's reply explains the stale comment it found, followed by a propose_edit card showing one removed line and two added lines, with Accept and Reject buttons.">
+  <figcaption>A live session, not a mock-up. Asked about a stale header comment in <code>bin/fethr.js</code>, the agent read the file and proposed dropping the line. Accept puts the change in the editor buffer; it shipped in the same commit as this page.</figcaption>
+</figure>
+
+<main>
+  <section id="how">
+    <h2>How it is put together</h2>
+    <div class="cols">
+      <article>
+        <h3>Proposes, never writes</h3>
+        <p>The agent can read, grep and glob inside the folder you opened, and nothing else: every mutating tool is disabled server-side. Its one way to change anything is <code>propose_edit</code>, which shows you a diff card. You accept or reject.</p>
+      </article>
+      <article>
+        <h3>A peer process, not a plugin</h3>
+        <p>The agent runs on the Claude Agent SDK with the Claude Code login already on your machine, so there is no API key to configure. The editor pipes context in and renders what comes back. There is no extension platform to carry.</p>
+      </article>
+      <article>
+        <h3>Your browser is the shell</h3>
+        <p>fethr starts a local server on 127.0.0.1 and opens your browser, the rendering engine your OS already ships. CodeMirror 6 underneath. No Electron. The native macOS window bundles the same server and shows the same page.</p>
+      </article>
+    </div>
+  </section>
+
+  <section id="panel">
+    <h2>In the panel</h2>
+    <ul class="list">
+      <li><b>Context you can see.</b> A pill row above the composer shows exactly what rides along with your next message: the current file, the live selection, the real git branch, and any file you attached by typing <code>@</code>.</li>
+      <li><b>Live status.</b> Thinking, the tool in use, writing. Streamed thinking sits in a collapsible block, and there is a stop button.</li>
+      <li><b>Clickable references.</b> <code>app.js:42</code> in a reply jumps the editor to that file and line.</li>
+      <li><b>Model picker.</b> Default, opus, sonnet, haiku or fable 5. Switching starts a fresh conversation.</li>
+      <li><b>Auto mode.</b> Proposals apply straight to the buffer, still undoable with <kbd>⌘Z</kbd>. Off by default.</li>
+      <li><b>Voice input.</b> The mic button uses the browser's built-in speech recognition in Chromium-based browsers. No server, no key.</li>
+      <li><b>Chat history</b> persists per project, panels resize by dragging and remember their widths, <kbd>⌘J</kbd> toggles the panel and <kbd>⌘B</kbd> the sidebar.</li>
+      <li><b>Highlighting</b> for JavaScript and TypeScript, Python, Markdown, HTML, CSS and JSON.</li>
+    </ul>
+  </section>
+
+  <section id="weights">
+    <h2>Weights</h2>
+    <dl class="ledger mono">
+      <div><dt>editor bundle</dt><dd>about 660 KB<small>the code that runs the editor in your browser</small></dd></div>
+      <div><dt>native macOS app</dt><dd>40 MB<small>disk image, Apple Silicon</small></dd></div>
+      <div><dt>first npx run</dt><dd>a few hundred MB, once<small>the Agent SDK ships its own copy of the claude binary; npx caches it after the first run</small></dd></div>
+      <div><dt>this page</dt><dd>one HTML file and one image<small>no JavaScript, no web fonts, no tracking</small></dd></div>
+    </dl>
+  </section>
+
+  <section id="before" class="before">
+    <h2>Before you run it</h2>
+    <p><b>Alpha.</b> It works, and it has rough edges. What shipped in each version is in the <a href="https://github.com/evojewel/fethr/blob/main/CHANGELOG.md">changelog</a>; the design decisions and the bugs behind them are in <a href="https://github.com/evojewel/fethr/blob/main/docs/ARCHITECTURE.md">ARCHITECTURE.md</a>.</p>
+    <p><b>You need Claude Code.</b> The panel uses the login already on your machine, and tells you if there is none. The native app also needs a Node install it can find (Homebrew or nvm), because it runs the same server as the command line does.</p>
+    <p><b>What leaves your machine.</b> The editor itself makes no network calls. The agent panel does: the current file, your selection and anything you attach go to Anthropic's API through your Claude Code login, the same as using Claude Code directly. Don't open the panel on files you don't want leaving your machine.</p>
+    <p><b>Scope.</b> File access is confined to the folder you launch with, symlinks included. A Finder double-click asks you to choose a folder rather than opening your home directory.</p>
+    <p><b>First launch of the app.</b> The build is signed but not notarized, so macOS blocks it once. Allow it under System Settings, Privacy &amp; Security, then open it again.</p>
+  </section>
 </main>
+
+<footer>
+  <span>MIT licence</span>
+  <span>Made by Jewel Lukose</span>
+  <span>An independent project, not affiliated with or endorsed by Anthropic</span>
+  <span class="spacer"></span>
+  <a href="https://github.com/evojewel/fethr">github.com/evojewel/fethr</a>
+</footer>
+
+</div>
 </body>
 </html>

@@ -1,54 +1,84 @@
 # fethr
 
-> fethr is a featherweight code editor with first-class AI agent integration,
-> currently under construction. The name is pronounced "feather".
+> fethr is a featherweight code editor with a first-class AI agent panel. Alpha;
+> latest release v0.9.3-alpha (2026-08-22). The name is pronounced "feather".
 
 ## What it is
 
-- A minimal, fast desktop code editor where an AI coding agent is a first-class
-  peer process, not a bolted-on extension: the editor forwards context
-  (selection, files, project) and renders results (streams, diffs); the
-  intelligence lives in the agent runtime.
+- A minimal, fast code editor where an AI coding agent is a first-class peer
+  process, not a bolted-on extension: the editor forwards context (current file,
+  selection, attached files, the real git branch) and renders results (streamed
+  replies, diff proposals); the intelligence lives in the agent runtime.
 - Designed around the front-end/runtime split popularized by Claude Code.
   fethr is an independent project, not affiliated with or endorsed by Anthropic.
-- No extension platform by design: language intelligence via LSP, syntax via
-  tree-sitter, agent via its own protocol.
+- No extension platform by design.
 
-## Status
+## How to run it
 
-Alpha. `npx @evojewel/fethr@alpha .` opens a working editor with an agent panel: a local
-server bound to 127.0.0.1 with the OS browser as the shell, CodeMirror 6 core, file tree,
-syntax highlighting (JS/TS, Python, Markdown, HTML, CSS, JSON), edit and save. No Electron.
-File access is confined to the launch directory.
+- `npx @evojewel/fethr@alpha .` starts a local server bound to 127.0.0.1 and opens
+  the OS browser as the shell. `fethr --app` opens a chromeless Chrome/Edge window.
+- Native macOS app (Apple Silicon, ~40 MB disk image) attached to each GitHub
+  release. It bundles the same Node server as a sidecar, so it needs a system Node
+  install (Homebrew or nvm are found automatically) and Claude Code installed.
+  Signed but not notarized: macOS blocks the first launch until allowed under
+  System Settings > Privacy & Security.
+- Both paths need Node 18+ and an existing Claude Code login; there is no API key
+  to configure.
 
-The agent panel (Cmd-J) runs on the Claude Agent SDK using the machine's existing Claude
-Code login. It is read-only by construction (Read/Grep/Glob only; all mutating tools
-disabled); its sole change mechanism is a propose_edit tool whose proposals render as diff
-cards the writer accepts or rejects — accepted edits apply in the editor, never directly
-to disk. The panel shows live agent state (thinking/tool/writing phases, streamed thinking
-in a collapsible block, per-tool activity detail), has a stop button, a model picker
-(default/opus/sonnet/haiku/fable 5 — fable folds back to default if unavailable on the
-account), renders markdown replies, and an auto-apply mode that skips the manual Accept
-click while still requiring an explicit save before anything hits disk. Cmd-B collapses
-the file-tree sidebar. A context pill row above the composer shows exactly what's being
-sent — current file, live selection, and any files attached via @-mention (autocomplete
-against the workspace). File:line references in replies (e.g. app.js:42) render as
-clickable links that jump the editor there. A mic button does live speech-to-text via the
-browser's Web Speech API for hands-free prompting.
+## The editor
 
-A native macOS app shell (Tauri, src-tauri/) provides the same editor including the full
-agent panel: it bundles the Node server as a sidecar and spawns it on launch (needs a
-system Node install; the app locates Homebrew/nvm installs automatically). Also needs
-Claude Code installed (fethr's premise: you already have it, for the login) — the
-sidecar skips the Agent SDK's own bundled claude binary (300MB+) via npm's
---omit=optional and points the SDK at the system install instead. Bundle size: ~55MB,
-not ~360MB. The npx path can't apply the same fix (npm has no supported mechanism for a
-package to make a downstream install skip its own optionalDependencies), so first-time
-`npx @evojewel/fethr` still pulls the SDK's full ~360MB — a one-time cost npx caches after.
-The editor code itself is ~650KB; that number describes the editor, not the npx download.
+CodeMirror 6 core (about 660 KB of editor code), file tree with collapsible
+folders, syntax highlighting for JS/TS, Python, Markdown, HTML, CSS and JSON, edit
+and save (Cmd-S; optional auto-save for typed edits). No Electron. File access is
+confined to the launch directory, with symlinks resolved and re-checked. Panels
+resize by dragging and persist their widths; Cmd-B collapses the sidebar. The
+sidebar header shows the real git branch, read server-side.
+
+## The agent panel
+
+Cmd-J opens it. Runs on the Claude Agent SDK using the machine's Claude Code login.
+
+- Read-only by construction: Read/Grep/Glob inside the workspace only; every
+  mutating tool is disabled server-side.
+- The sole change mechanism is a propose_edit tool. Proposals render as diff cards
+  the writer accepts or rejects; accepted edits apply in the editor buffer
+  (undoable with Cmd-Z). Agent-driven changes never trigger auto-save; the writer
+  saves. The agent process never writes to disk.
+- Live status (thinking / tool / writing), streamed thinking in a collapsible
+  block, per-tool activity detail, a stop button, markdown replies.
+- Model picker: default, opus, sonnet, haiku, fable 5 (fable folds back to default
+  if the account can't reach it). Switching models starts a new conversation.
+- Auto mode applies proposals straight to the buffer without a manual Accept;
+  off by default. Proposals restored from an earlier session always require a
+  manual Accept.
+- Context is visible: a pill row above the composer shows the current file, the
+  live selection and any files attached via @-mention (autocomplete against the
+  workspace). The current git branch is sent as explicit context.
+- file:line references in replies (e.g. app.js:42) are clickable and jump the
+  editor there.
+- Voice input via the browser's Web Speech API (verified in Chromium).
+- Chat history persists per project in .fethr/chat.json inside the workspace.
+
+## Privacy
+
+The editor itself makes no network calls. The agent panel sends the current file,
+the selection and anything attached to Anthropic's API through the user's Claude
+Code login, the same as using Claude Code directly.
+
+## Weight, honestly
+
+The editor bundle is about 660 KB. The native app is about 40 MB because it skips
+the Agent SDK's bundled copy of the claude binary and uses the system install. The
+npx path cannot do the same (npm gives a package no supported way to make a
+downstream install skip its own optionalDependencies), so the first `npx` run also
+downloads that bundled binary, a few hundred MB, cached by npx afterwards.
 
 ## Links
 
+- Site: https://fethr.dev/
 - Source: https://github.com/evojewel/fethr
+- Releases (native app downloads): https://github.com/evojewel/fethr/releases
+- Changelog: https://github.com/evojewel/fethr/blob/main/CHANGELOG.md
+- Architecture and lessons: https://github.com/evojewel/fethr/blob/main/docs/ARCHITECTURE.md
 - npm: https://www.npmjs.com/package/@evojewel/fethr (command installed: `fethr`)
 - Author: Jewel Lukose

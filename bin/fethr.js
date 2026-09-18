@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 // fethr — a featherweight code editor with first-class agent integration.
-// This is a name-reservation shell; the editor is under construction.
 
 import { createRequire } from "node:module";
 

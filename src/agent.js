@@ -133,10 +133,21 @@ async function run(root, { prompt, sessionId, context, extraFiles, gitBranch, mo
     fullPrompt += `\n\n<attached_file path="${f.path}">\n${f.content ?? ""}\n</attached_file>`;
   }
 
+  // The child's stderr is the only place the real reason for a failure
+  // appears (a 400 from the API, a too-old claude, a missing login) — the
+  // result message itself only says "error_during_execution". Keep the tail
+  // and hand it to the panel when the run does not succeed.
+  const stderrTail = [];
   const q = query({
     prompt: fullPrompt,
     options: {
       cwd: root,
+      stderr: (chunk) => {
+        for (const line of String(chunk).split("\n")) {
+          if (line.trim()) stderrTail.push(line.trim());
+        }
+        if (stderrTail.length > 20) stderrTail.splice(0, stderrTail.length - 20);
+      },
       systemPrompt: { type: "preset", preset: "claude_code", append: RULES },
       mcpServers: { fethr: fethrServer },
       allowedTools: ["Read", "Grep", "Glob", "mcp__fethr__propose_edit"],
@@ -151,8 +162,14 @@ async function run(root, { prompt, sessionId, context, extraFiles, gitBranch, mo
     },
   });
 
-  req.on("close", () => {
-    if (typeof q.interrupt === "function") q.interrupt().catch(() => {});
+  // Stop the agent when the browser goes away (the panel's stop button aborts
+  // the fetch). This must hang off the *response*: since Node 16 a request
+  // emits "close" as soon as its body has been read, so listening there
+  // interrupted every run the moment it started. With the August Claude Code
+  // that interrupt was a no-op; 2.1.26x honours it, and every reply became
+  // "error_during_execution ... result_type=user".
+  res.on("close", () => {
+    if (!res.writableFinished && typeof q.interrupt === "function") q.interrupt().catch(() => {});
   });
 
   for await (const msg of q) {
@@ -180,10 +197,12 @@ async function run(root, { prompt, sessionId, context, extraFiles, gitBranch, mo
         }
       }
     } else if (msg.type === "result") {
+      const ok = msg.subtype === "success";
       emit(res, {
         type: "done",
-        ok: msg.subtype === "success",
-        error: msg.subtype === "success" ? undefined : msg.subtype,
+        ok,
+        error: ok ? undefined : msg.subtype,
+        detail: ok ? undefined : (stderrTail.filter((l) => !/^\s*at /.test(l)).slice(-3).join(" · ") || undefined),
       });
     }
   }

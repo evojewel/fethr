@@ -814,7 +814,7 @@ async function askAgent(prompt) {
           else recordAndAdd({ type: "tool", text: `error: ${ev.message}` });
         } else if (ev.type === "done" && !ev.ok) {
           if (selectedModel === "fable" && !sawSession) markFableUnavailable();
-          else recordAndAdd({ type: "tool", text: `ended: ${ev.error}` });
+          else recordAndAdd({ type: "tool", text: `ended: ${ev.error}${ev.detail ? " — " + ev.detail : ""}` });
         }
       }
     }

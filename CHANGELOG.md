@@ -4,6 +4,14 @@ All notable changes to fethr are documented here. Dates are when each version wa
 
 ## v0.9.4-alpha — unreleased
 
+**Fix: every agent run failed with `error_during_execution … result_type=user` on current Claude
+Code.** `src/agent.js` interrupted the query on the *request*'s `close` event, which Node has
+emitted as soon as the body is read since v16 — so each run was cancelled the moment it began. The
+August Claude Code ignored that interrupt; 2.1.26x honours it. The interrupt now hangs off the
+*response*'s `close`, which fires only when the browser actually goes away (the stop button still
+works). Alongside: the child's stderr tail now travels with a failed result, so the panel shows the
+real reason instead of only the subtype.
+
 **Taken from a sibling project's playbook, in one pass.**
 - **An icon.** The app and DMG shipped Tauri's stock logo. `src-tauri/icon.svg` is now the master
   (the site's own mark: the editor's dark ground with the accent dot); `npx tauri icon` regenerates

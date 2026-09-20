@@ -122,6 +122,21 @@ async function main() {
     );
     check("tree: clicking again re-expands", visibleAfterReexpand);
 
+    // View menu: pick a theme, it applies to the page and the editor, and persists
+    await page.click("#toggle-view");
+    check("view menu opens", await page.$eval("#viewmenu", (el) => el.classList.contains("open")));
+    const themeIds = await page.$$eval("#viewmenu .row", (rows) => rows.map((r) => r.dataset.id));
+    check("view menu lists auto plus four themes", themeIds.length === 5 && themeIds[0] === "auto");
+    await page.click("#viewmenu .row[data-id='paper']");
+    check("picking a theme sets html[data-theme]", (await page.$eval("html", (el) => el.dataset.theme)) === "paper");
+    check("menu closes after a pick", !(await page.$eval("#viewmenu", (el) => el.classList.contains("open"))));
+    const bgPaper = await page.$eval(".cm-editor", (el) => getComputedStyle(el).backgroundColor);
+    check("editor surface follows the theme (light)", bgPaper === "rgb(245, 248, 246)");
+    await page.reload({ waitUntil: "domcontentloaded" });
+    check("theme persists across reload", (await page.$eval("html", (el) => el.dataset.theme)) === "paper");
+    await page.evaluate(() => localStorage.removeItem("fethr.theme"));
+    await page.reload({ waitUntil: "domcontentloaded" });
+
     // Auto-save: on by default, and typing eventually persists without ⌘S
     check("auto-save checkbox is checked by default", await page.$eval("#autosave", (el) => el.checked));
     await page.click("#tree .file-row[data-p='app.js']");

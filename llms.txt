@@ -31,7 +31,7 @@ CodeMirror 6 core (about 660 KB of editor code), file tree with collapsible
 folders, syntax highlighting for JS/TS, Python, Markdown, HTML, CSS and JSON, edit
 and save (Cmd-S; optional auto-save for typed edits). No Electron. File access is
 confined to the launch directory, with symlinks resolved and re-checked. Panels
-resize by dragging and persist their widths; Cmd-B collapses the sidebar. The
+resize by dragging and persist their widths; Cmd-B collapses the sidebar. A "view" button in the footer picks one of five themes (auto, moss, paper, slate, dawn). The
 sidebar header shows the real git branch, read server-side.
 
 ## The agent panel

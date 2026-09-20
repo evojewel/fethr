@@ -5,9 +5,33 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>fethr</title>
 <style>
+  /* Themes (web/theme.js). Moss is the default and the base block; the
+     others override it, keyed off <html data-theme>. Auto follows the system. */
   :root {
     --bg: #101312; --panel: #161a18; --ink: #e8ece9; --muted: #8fa098;
     --accent: #6fd3b2; --rule: #242a27;
+    --add: #7fd0a0; --del: #d08080;
+    --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
+    --accent-line: color-mix(in srgb, var(--accent) 35%, transparent);
+    --shadow: rgba(0,0,0,.35);
+  }
+  :root[data-theme="paper"] {
+    --bg: #f5f8f6; --panel: #ffffff; --ink: #17211d; --muted: #5c6d64;
+    --accent: #0e7a58; --rule: #d8e1dc; --add: #1f7a45; --del: #b23a3a; --shadow: rgba(23,33,29,.18);
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme]), :root[data-theme="auto"] {
+      --bg: #f5f8f6; --panel: #ffffff; --ink: #17211d; --muted: #5c6d64;
+      --accent: #0e7a58; --rule: #d8e1dc; --add: #1f7a45; --del: #b23a3a; --shadow: rgba(23,33,29,.18);
+    }
+  }
+  :root[data-theme="slate"] {
+    --bg: #14181d; --panel: #1b2027; --ink: #e6eaef; --muted: #93a0ae;
+    --accent: #86adde; --rule: #262c34; --add: #8fc7a4; --del: #d98b8b; --shadow: rgba(0,0,0,.4);
+  }
+  :root[data-theme="dawn"] {
+    --bg: #f7f3ea; --panel: #fffdf8; --ink: #2a2419; --muted: #6e6147;
+    --accent: #8a6a1f; --rule: #e3dbc8; --add: #3e7a3a; --del: #a83d2f; --shadow: rgba(43,36,25,.18);
   }
   * { box-sizing: border-box; }
   :root { --sidebar-w: 220px; --agent-w: 0px; --agent-resizer-w: 0px; }
@@ -113,8 +137,8 @@
     font-family: ui-monospace, Menlo, monospace; padding: 6px 10px;
     border-top: 1px solid var(--rule); background: var(--bg);
   }
-  .proposal .add { color: #7fd0a0; }
-  .proposal .del { color: #d08080; }
+  .proposal .add { color: var(--add); }
+  .proposal .del { color: var(--del); }
   .proposal .pnote { padding: 6px 10px 0; font-size: 11px; color: var(--muted); font-style: italic; }
   .proposal .pactions { display: flex; gap: 8px; padding: 6px 10px; border-top: 1px solid var(--rule); }
   .proposal button {
@@ -149,7 +173,7 @@
     margin-left: auto; background: none; border: 1px solid var(--rule); color: var(--muted);
     border-radius: 5px; padding: 0 10px; font-size: 11.5px; cursor: pointer;
   }
-  #agent-status button:hover { color: #d08080; border-color: #d08080; }
+  #agent-status button:hover { color: var(--del); border-color: var(--del); }
   #agent h2 { display: flex; align-items: center; gap: 8px; }
   #agent h2 select {
     margin-left: auto; background: var(--bg); color: var(--muted);
@@ -167,8 +191,8 @@
     display: inline-flex; align-items: center; gap: 4px;
     font-family: ui-monospace, Menlo, monospace; font-size: 11px;
     padding: 2px 8px; border-radius: 99px; line-height: 1.6;
-    background: var(--accent-soft, rgba(111,211,178,.14)); color: var(--accent);
-    border: 1px solid rgba(111,211,178,.35); white-space: nowrap;
+    background: var(--accent-soft); color: var(--accent);
+    border: 1px solid var(--accent-line); white-space: nowrap;
   }
   .ctx-pill.mention { background: var(--bg); color: var(--ink); border-color: var(--rule); }
   .ctx-pill button {
@@ -180,7 +204,7 @@
     display: none; position: absolute; bottom: 100%; left: 8px; right: 8px;
     margin-bottom: 4px; max-height: 160px; overflow-y: auto;
     background: var(--bg); border: 1px solid var(--rule); border-radius: 8px;
-    box-shadow: 0 4px 16px rgba(0,0,0,.35); z-index: 5;
+    box-shadow: 0 4px 16px var(--shadow); z-index: 5;
   }
   .mention-menu.open { display: block; }
   .mention-menu .row {
@@ -199,10 +223,28 @@
   }
   #mic:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
   #mic:disabled { opacity: .35; cursor: default; }
-  #mic.recording { color: #d08080; border-color: #d08080; animation: pulse 1.2s ease-in-out infinite; }
+  #mic.recording { color: var(--del); border-color: var(--del); animation: pulse 1.2s ease-in-out infinite; }
   @media (prefers-reduced-motion: reduce) { #mic.recording { animation: none; } }
   #composer .note { font-size: 11px; color: var(--muted); margin-top: 4px; }
   a.fileref { color: var(--accent); text-decoration: underline dotted; cursor: pointer; }
+  /* the view menu: a popover above the footer */
+  #viewmenu {
+    display: none; position: fixed; right: 12px; bottom: 34px; z-index: 6; min-width: 240px;
+    background: var(--panel); border: 1px solid var(--rule); border-radius: 8px;
+    box-shadow: 0 6px 20px var(--shadow); padding: 6px;
+  }
+  #viewmenu.open { display: block; }
+  #viewmenu .row {
+    display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+    background: none; border: none; color: var(--ink); padding: 6px 8px; border-radius: 6px; cursor: pointer; font: inherit;
+  }
+  #viewmenu .row:hover, #viewmenu .row:focus-visible { background: var(--rule); outline: none; }
+  #viewmenu .row[aria-checked="true"] .name { color: var(--accent); }
+  #viewmenu .sw { width: 22px; height: 16px; border-radius: 3px; border: 1px solid var(--rule); position: relative; overflow: hidden; flex: none; }
+  #viewmenu .sw i { position: absolute; left: 0; right: 0; bottom: 0; height: 45%; display: block; }
+  #viewmenu .sw.auto { background: linear-gradient(90deg, #101312 50%, #f5f8f6 50%); }
+  #viewmenu .name { font-size: 12.5px; }
+  #viewmenu .note { font-size: 11px; color: var(--muted); display: block; }
 </style>
 </head>
 <body>
@@ -248,8 +290,10 @@
   <label class="autosave updates" title="Once a day, fetch fethr.dev/version.json to learn whether a newer fethr exists. Nothing is sent.">
     <input type="checkbox" id="updatecheck" checked> updates
   </label>
+  <button id="toggle-view" title="Theme" aria-haspopup="menu" aria-expanded="false">view</button>
   <button id="toggle-agent" title="⌘J">agent</button>
 </footer>
+<div id="viewmenu" role="menu" aria-label="Theme"></div>
 <script type="module" src="/editor.js"></script>
 </body>
 </html>

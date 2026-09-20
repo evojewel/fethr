@@ -5,6 +5,7 @@ import { EditorView, keymap } from "@codemirror/view";
 import { EditorState, Compartment } from "@codemirror/state";
 import { indentWithTab } from "@codemirror/commands";
 import { oneDark } from "@codemirror/theme-one-dark";
+import { THEMES, loadTheme, saveTheme, isDark } from "./theme.js";
 import { javascript } from "@codemirror/lang-javascript";
 import { python } from "@codemirror/lang-python";
 import { markdown } from "@codemirror/lang-markdown";
@@ -26,6 +27,32 @@ const langBy = (p) => {
 
 const $ = (s) => document.querySelector(s);
 const langC = new Compartment();
+
+// ---- theme (web/theme.js) ----
+// Colours are CSS, keyed off <html data-theme>. CodeMirror is the one part
+// that cannot follow a CSS variable for its syntax palette, so it gets
+// oneDark on dark looks and its default light highlighting otherwise, with
+// its surfaces pointed at the same tokens as the rest of the page.
+const themeC = new Compartment();
+const prefersDark = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : { matches: true, addEventListener() {} };
+let themeId = loadTheme(localStorage);
+const surface = EditorView.theme({
+  "&": { backgroundColor: "var(--bg)", color: "var(--ink)" },
+  ".cm-gutters": { backgroundColor: "var(--bg)", color: "var(--muted)", borderRight: "1px solid var(--rule)" },
+  ".cm-activeLine": { backgroundColor: "color-mix(in srgb, var(--panel) 70%, transparent)" },
+  ".cm-activeLineGutter": { backgroundColor: "var(--panel)" },
+  "&.cm-focused .cm-cursor": { borderLeftColor: "var(--accent)" },
+});
+const cmTheme = () => (isDark(themeId, prefersDark.matches) ? [oneDark, surface] : [surface]);
+function applyTheme() {
+  document.documentElement.dataset.theme = themeId;
+  if (window.__fethrView) window.__fethrView.dispatch({ effects: themeC.reconfigure(cmTheme()) });
+  for (const row of document.querySelectorAll("#viewmenu .row")) {
+    row.setAttribute("aria-checked", row.dataset.id === themeId ? "true" : "false");
+  }
+}
+document.documentElement.dataset.theme = themeId;
+prefersDark.addEventListener("change", () => { if (themeId === "auto") applyTheme(); });
 let current = null;
 let dirty = false;
 
@@ -86,7 +113,7 @@ const view = new EditorView({
   parent: $("#editor"),
   state: EditorState.create({
     doc: "\n  fethr — pick a file on the left.\n",
-    extensions: [basicSetup, oneDark, langC.of([])],
+    extensions: [basicSetup, themeC.of(cmTheme()), langC.of([])],
   }),
 });
 window.__fethrView = view; // test hook only — direct selection control for automated tests
@@ -98,7 +125,7 @@ let suppressAutosaveOnce = false;
 
 const extensions = () => [
   basicSetup,
-  oneDark,
+  themeC.of(cmTheme()),
   langC.of(current ? langBy(current) : []),
   keymap.of([
     indentWithTab,
@@ -895,4 +922,60 @@ async function checkForUpdate(meta) {
   el.textContent = state.kind === "download" ? `${state.version} is out — download` : `${state.version} is out — npx @evojewel/fethr@alpha`;
   el.title = "Learned from fethr.dev/version.json, fetched once a day. Nothing was sent.";
   el.hidden = false;
+}
+
+// ---- view menu ----
+// A popover of the themes in web/theme.js, each row a swatch drawn from its
+// own two colours so it is readable before the theme is applied.
+{
+  const menu = $("#viewmenu");
+  for (const t of THEMES) {
+    const row = document.createElement("button");
+    row.className = "row";
+    row.setAttribute("role", "menuitemradio");
+    row.dataset.id = t.id;
+    const sw = document.createElement("span");
+    sw.className = "sw" + (t.swatch ? "" : " auto");
+    if (t.swatch) {
+      sw.style.background = t.swatch.ground;
+      const i = document.createElement("i");
+      i.style.background = t.swatch.accent;
+      sw.appendChild(i);
+    }
+    const text = document.createElement("span");
+    const name = document.createElement("span");
+    name.className = "name";
+    name.textContent = t.label;
+    const note = document.createElement("span");
+    note.className = "note";
+    note.textContent = t.note;
+    text.append(name, note);
+    row.append(sw, text);
+    row.onclick = () => {
+      themeId = t.id;
+      saveTheme(localStorage, themeId);
+      applyTheme();
+      closeViewMenu();
+    };
+    menu.appendChild(row);
+  }
+  applyTheme();
+
+  function closeViewMenu() {
+    menu.classList.remove("open");
+    $("#toggle-view").setAttribute("aria-expanded", "false");
+  }
+  $("#toggle-view").onclick = (e) => {
+    e.stopPropagation();
+    const open = !menu.classList.contains("open");
+    menu.classList.toggle("open", open);
+    $("#toggle-view").setAttribute("aria-expanded", String(open));
+    if (open) menu.querySelector('.row[aria-checked="true"]')?.focus();
+  };
+  document.addEventListener("click", (e) => {
+    if (menu.classList.contains("open") && !menu.contains(e.target)) closeViewMenu();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && menu.classList.contains("open")) { closeViewMenu(); $("#toggle-view").focus(); }
+  });
 }

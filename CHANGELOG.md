@@ -4,6 +4,12 @@ All notable changes to fethr are documented here. Dates are when each version wa
 
 ## v0.9.4-alpha — unreleased
 
+**Feature: a view menu with themes.** The "view" button in the footer opens a picker: Auto,
+Moss (the dark the editor shipped with), Paper (the website's surface), Slate (cooler dark) and
+Dawn (warm light). Colours are CSS keyed off `<html data-theme>` (`web/theme.js` holds the list);
+CodeMirror swaps between oneDark and its default light highlighting to match. The choice persists
+locally. Adapted from skript's View menu, cut to one axis.
+
 **Fix: every agent run failed with `error_during_execution … result_type=user` on current Claude
 Code.** `src/agent.js` interrupted the query on the *request*'s `close` event, which Node has
 emitted as soon as the body is read since v16 — so each run was cancelled the moment it began. The

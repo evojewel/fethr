@@ -10,8 +10,17 @@ import { execFile, execFileSync } from "node:child_process";
 
 const DIST = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "dist");
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
-const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", "__pycache__", "env", "venv"]);
+const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", "target", "__pycache__", "env", "venv"]);
+// "target": opening fethr on its own repo put ~15k Rust build files from
+// src-tauri/target in the sidebar and froze the tree render.
 const MAX_TREE_ENTRIES = 5000;
+const VERSION = JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "package.json"), "utf8")).version;
+
+// The page is same-origin with everything it needs. connect-src also allows
+// fethr.dev for the once-a-day version check (web/update.js) and nothing else,
+// so a prompt-injected script has nowhere to send anything even if the
+// textContent discipline in the proposal renderer ever slips.
+const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://fethr.dev; base-uri 'none'; form-action 'none'; object-src 'none'";
 
 // fethr never explicitly told the agent the branch, but it answered a
 // branch question anyway — turns out the Claude Code harness itself
@@ -90,8 +99,8 @@ function listTree(root) {
   return out;
 }
 
-function send(res, code, body, type = "application/json") {
-  res.writeHead(code, { "content-type": type, "cache-control": "no-store" });
+function send(res, code, body, type = "application/json", extra = {}) {
+  res.writeHead(code, { "content-type": type, "cache-control": "no-store", ...extra });
   res.end(body);
 }
 
@@ -110,13 +119,19 @@ export function serve(root, onReady, opts = {}) {
     const u = new URL(req.url, "http://localhost");
 
     if (req.method === "GET" && (u.pathname === "/" || u.pathname === "/index.html")) {
-      return send(res, 200, fs.readFileSync(path.join(DIST, "index.html")), "text/html; charset=utf-8");
+      return send(res, 200, fs.readFileSync(path.join(DIST, "index.html")), "text/html; charset=utf-8", { "content-security-policy": CSP });
     }
     if (req.method === "GET" && u.pathname === "/editor.js") {
       return send(res, 200, fs.readFileSync(path.join(DIST, "editor.js")), "text/javascript; charset=utf-8");
     }
     if (req.method === "GET" && u.pathname === "/api/meta") {
-      return send(res, 200, JSON.stringify({ root, name: path.basename(root), gitBranch: getGitBranch(root) }));
+      // channel: which release train this instance came from, so the update
+      // check compares against the right number — the DMG and the npm tag
+      // do not move together.
+      return send(res, 200, JSON.stringify({
+        root, name: path.basename(root), gitBranch: getGitBranch(root),
+        version: VERSION, channel: opts.sidecar ? "app" : "npm",
+      }));
     }
     if (u.pathname === "/api/chat") {
       // Conversation history lives with the project, not the browser — a

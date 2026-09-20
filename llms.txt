@@ -61,7 +61,9 @@ Cmd-J opens it. Runs on the Claude Agent SDK using the machine's Claude Code log
 
 ## Privacy
 
-The editor itself makes no network calls. The agent panel sends the current file,
+The editor makes one network call on its own: once a day it fetches
+https://fethr.dev/version.json (a public file, nothing sent) to learn whether a newer
+version exists; a footer checkbox turns it off. The agent panel sends the current file,
 the selection and anything attached to Anthropic's API through the user's Claude
 Code login, the same as using Claude Code directly.
 

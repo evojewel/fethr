@@ -22,7 +22,7 @@ const deps = {};
 for (const name of runtime) deps[name] = pkg.dependencies[name];
 require("fs").writeFileSync(
   "'"$DEST"'/package.json",
-  JSON.stringify({ name: "fethr-sidecar", private: true, type: "module", dependencies: deps }, null, 2)
+  JSON.stringify({ name: "fethr-sidecar", version: pkg.version, private: true, type: "module", dependencies: deps }, null, 2)
 );
 '
 

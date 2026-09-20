@@ -1,0 +1,43 @@
+name: ci
+
+# The gate. `verify` runs on every push: the node tests (workspace
+# confinement, tree walker, CSP, /api/meta, the update check's decisions),
+# the frontend build, and the real-browser suite against a chrome-headless-shell
+# the job installs itself. The agent panel's network calls need a Claude Code
+# login the runner does not have; the suite only asserts what renders locally.
+#
+# Installers are built by build-shell.yml, by hand or on a tag, not here.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # --omit=optional skips the Agent SDK's bundled claude binary (~200 MB);
+      # nothing here can use it without a login anyway.
+      - run: npm ci --omit=optional
+      - run: npm test
+      - run: npm run build
+      - name: Install chrome-headless-shell
+        id: chrome
+        run: |
+          out=$(npx --yes @puppeteer/browsers install chrome-headless-shell@stable --path "$RUNNER_TEMP/browsers")
+          echo "$out"
+          echo "path=$(echo "$out" | awk '{print $NF}')" >> "$GITHUB_OUTPUT"
+      - name: Real-browser suite
+        run: node test-ui/agent-panel.cjs
+        env:
+          FETHR_CHROME: ${{ steps.chrome.outputs.path }}

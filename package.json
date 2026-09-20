@@ -1,6 +1,6 @@
 {
   "name": "@evojewel/fethr",
-  "version": "0.9.3-alpha",
+  "version": "0.9.4-alpha",
   "publishConfig": {
     "access": "public"
   },
@@ -54,6 +54,8 @@
     "puppeteer-core": "^25.8.0"
   },
   "scripts": {
+    "test": "node --test test/*.test.js",
+    "test:ui": "node test-ui/agent-panel.cjs",
     "build": "esbuild web/editor.js --bundle --format=esm --minify --outfile=dist/editor.js && cp web/index.html dist/index.html",
     "prepublishOnly": "npm run build"
   }

@@ -2,6 +2,28 @@
 
 All notable changes to fethr are documented here. Dates are when each version was tagged.
 
+## v0.9.4-alpha — unreleased
+
+**Taken from a sibling project's playbook, in one pass.**
+- **An icon.** The app and DMG shipped Tauri's stock logo. `src-tauri/icon.svg` is now the master
+  (the site's own mark: the editor's dark ground with the accent dot); `npx tauri icon` regenerates
+  every size from it.
+- **A CI gate.** `ci.yml` runs on every push: `npm test` (node tests for workspace confinement, the
+  tree walker, the CSP header, `/api/meta` and the update check's decisions), the build, and the
+  real-browser suite against a chrome-headless-shell the job installs itself. Before this, nothing
+  ran automatically.
+- **A daily version check.** `web/update.js` fetches `https://fethr.dev/version.json` once a day
+  and the footer says when a newer DMG (native app) or npm tag (npx) exists. This is the editor's
+  one network call on its own; a footer checkbox turns it off, and README, site and llms.txt now say
+  so. `/api/meta` reports `version` and `channel` so the right number is compared.
+- **A Content-Security-Policy** on the editor page, sent by the server (the native window loads
+  the same `127.0.0.1` URL, so this is the one that applies): same-origin everything, `connect-src`
+  limited to the server and fethr.dev. `tauri.conf.json` carries the same string instead of `null`.
+- **Fix:** the tree walker skips `target` — opening fethr on its own repo put ~15k Rust build
+  files in the sidebar and froze the render.
+- `docs/TODO.md` is the single tracker from here on, with the release order that keeps
+  `version.json` and the download link honest.
+
 ## v0.9.2-alpha — 2026-08-22
 
 **Fix:** the agent now gets a real, freshly-checked git branch instead of relying on the

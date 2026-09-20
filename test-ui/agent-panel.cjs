@@ -13,6 +13,9 @@ const os = require("node:os");
 const fs = require("node:fs");
 
 function findChrome() {
+  // FETHR_CHROME (or argv[2]) may point at a chrome-headless-shell binary —
+  // the one CI installs, and the one that does not hang on screenshots here.
+  if (process.env.FETHR_CHROME) return process.env.FETHR_CHROME;
   if (process.argv[2]) return process.argv[2];
   const bases = [
     path.join(os.homedir(), ".cache/puppeteer/chrome"),
@@ -44,7 +47,12 @@ async function main() {
   fs.writeFileSync(path.join(fixture, "lib", "util.js"), "export const x = 1;\n");
 
   const url = await new Promise((resolve) => serve(fixture, resolve));
-  const browser = await puppeteer.launch({ executablePath: findChrome(), headless: true });
+  const chrome = findChrome();
+  const browser = await puppeteer.launch({
+    executablePath: chrome,
+    headless: chrome.includes("chrome-headless-shell") ? "shell" : true,
+    args: ["--no-sandbox"], // CI runners run as root without a user namespace
+  });
   let failures = 0;
   const check = (label, cond) => {
     console.log(`${cond ? "ok " : "FAIL"} — ${label}`);

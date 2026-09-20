@@ -6,6 +6,7 @@
 <title>fethr — a featherweight code editor with a first-class agent panel</title>
 <meta name="description" content="fethr is a featherweight code editor with a first-class AI agent panel. The agent reads your project and proposes edits as diffs you accept in the editor; the agent process never touches your disk. CodeMirror core, your browser as the shell, no Electron. Alpha.">
 <link rel="canonical" href="https://fethr.dev/">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23101312'/%3E%3Ccircle cx='16' cy='16' r='6' fill='%236fd3b2'/%3E%3C/svg%3E">
 <meta property="og:title" content="fethr — a featherweight code editor with a first-class agent panel">
 <meta property="og:description" content="The agent reads your project and proposes edits as diffs you accept in the editor. CodeMirror core, no Electron, about 660 KB of editor.">
@@ -120,6 +121,10 @@
   .ledger dd small { font-family: -apple-system, "Segoe UI", system-ui, sans-serif; font-size: .82rem; color: var(--muted); }
   .before p { margin: 0 0 12px; color: var(--muted); max-width: 72ch; }
   .before p b { color: var(--ink); font-weight: 600; }
+  .order { margin: 0 0 14px; color: var(--muted); }
+  ol.next { margin: 0; padding-left: 1.3em; }
+  ol.next li { margin: 0 0 12px; color: var(--muted); }
+  ol.next b { color: var(--ink); font-weight: 600; }
 
   footer {
     margin: 70px 0 44px; padding-top: 22px; border-top: 1px solid var(--rule);
@@ -209,9 +214,20 @@
     <h2>Before you run it</h2>
     <p><b>Alpha.</b> It works, and it has rough edges. What shipped in each version is in the <a href="https://github.com/evojewel/fethr/blob/main/CHANGELOG.md">changelog</a>; the design decisions and the bugs behind them are in <a href="https://github.com/evojewel/fethr/blob/main/docs/ARCHITECTURE.md">ARCHITECTURE.md</a>.</p>
     <p><b>You need Claude Code.</b> The panel uses the login already on your machine, and tells you if there is none. The native app also needs a Node install it can find (Homebrew or nvm), because it runs the same server as the command line does.</p>
-    <p><b>What leaves your machine.</b> The editor itself makes no network calls. The agent panel does: the current file, your selection and anything you attach go to Anthropic's API through your Claude Code login, the same as using Claude Code directly. Don't open the panel on files you don't want leaving your machine.</p>
+    <p><b>What leaves your machine.</b> The editor makes one network call on its own: once a day it fetches <code>fethr.dev/version.json</code> to learn whether a newer version exists. Nothing is sent, and a checkbox in the footer turns it off. The agent panel makes others: the current file, your selection and anything you attach go to Anthropic's API through your Claude Code login, the same as using Claude Code directly. Don't open the panel on files you don't want leaving your machine.</p>
     <p><b>Scope.</b> File access is confined to the folder you launch with, symlinks included. A Finder double-click asks you to choose a folder rather than opening your home directory.</p>
     <p><b>First launch of the app.</b> The build is signed but not notarized, so macOS blocks it once. Allow it under System Settings, Privacy &amp; Security, then open it again.</p>
+  </section>
+
+  <section id="next">
+    <h2>What is coming, in the order it is being built</h2>
+    <p class="order">No dates. Where something is not here yet, this says what it costs you today.</p>
+    <ol class="next">
+      <li><b>A locked local API.</b> Today any page on your machine could call the editor's local server. A per-launch token closes that, and it is the line between alpha and beta.</li>
+      <li><b>The agent's real error text.</b> When the Claude Code on your machine is too old for a model, the panel says only that the process exited. It should show the message.</li>
+      <li><b>Windows and Linux builds.</b> The npx path already runs there. The native window waits on the app finding your Node install on those systems.</li>
+      <li><b>A notarized macOS build.</b> Until then, the first launch needs the allow step described above.</li>
+    </ol>
   </section>
 </main>
 

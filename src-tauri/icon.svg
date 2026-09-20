@@ -1,0 +1,9 @@
+<!-- fethr app icon, master. The same mark the site uses as its favicon: the
+     editor's own dark ground with the accent dot. Regenerate every size with
+       npx tauri icon src-tauri/icon.svg
+     macOS applies its own rounded mask on top; the inset keeps the dot clear
+     of it, and the transparent margin is what Big Sur-style icons expect. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <rect x="100" y="100" width="824" height="824" rx="184" fill="#101312"/>
+  <circle cx="512" cy="512" r="168" fill="#6fd3b2"/>
+</svg>

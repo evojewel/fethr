@@ -33,6 +33,8 @@ let dirty = false;
 // that server is a bundled Node sidecar the Rust side spawns and points the
 // window at — same server.js, same origin-relative paths, so this file has
 // no app-vs-CLI branching to carry.
+import { decide, fetchManifest, isEnabled, ENABLED_KEY } from "./update.js";
+
 const api = {
   meta: () => fetch("/api/meta").then((r) => r.json()),
   tree: () => fetch("/api/tree").then((r) => r.json()),
@@ -198,6 +200,7 @@ async function boot() {
     $("#branch").textContent = gitBranch;
     $("#branch").title = `git branch: ${gitBranch} (checked, not guessed)`;
   }
+  checkForUpdate(meta);
   const tree = await api.tree();
   fileList = tree.filter((n) => !n.dir).map((n) => n.path);
   renderTree(tree);
@@ -868,3 +871,28 @@ setInterval(() => fetch("/api/alive", { method: "POST" }).catch(() => {}), 5000)
 fetch("/api/alive", { method: "POST" }).catch(() => {});
 
 boot();
+
+// ---- update check (web/update.js) ----
+// Off switch in the footer; the daily fetch is the editor's only network
+// call on its own. The notice names the version and links to where it is.
+try {
+  $("#updatecheck").checked = isEnabled(localStorage);
+} catch { /* ignore */ }
+$("#updatecheck").onchange = () => {
+  try {
+    localStorage.setItem(ENABLED_KEY, $("#updatecheck").checked ? "1" : "0");
+  } catch { /* ignore */ }
+};
+
+async function checkForUpdate(meta) {
+  if (!meta.version || !isEnabled(localStorage)) return;
+  const manifest = await fetchManifest(localStorage);
+  if (!manifest) return;
+  const state = decide(manifest, meta.version, meta.channel);
+  if (state.kind === "current") return;
+  const el = $("#update");
+  el.href = state.url;
+  el.textContent = state.kind === "download" ? `${state.version} is out — download` : `${state.version} is out — npx @evojewel/fethr@alpha`;
+  el.title = "Learned from fethr.dev/version.json, fetched once a day. Nothing was sent.";
+  el.hidden = false;
+}

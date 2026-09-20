@@ -30,7 +30,7 @@ if (arg === "--version" || arg === "-v") {
     // Spawned by the native app shell (src-tauri) as a child process. No
     // banner, no browser-opening — just start the server and print a single
     // machine-parseable line so the Rust side can read the bound port.
-    serve(dir || process.cwd(), (url) => console.log(`FETHR_URL=${url}`));
+    serve(dir || process.cwd(), (url) => console.log(`FETHR_URL=${url}`), { sidecar: true });
   } else {
     serve(dir || process.cwd(), undefined, { app });
   }

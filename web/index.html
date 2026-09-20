@@ -76,6 +76,8 @@
   }
   #file { color: var(--ink); }
   #status { color: var(--accent); }
+  #update { color: var(--accent); text-decoration: underline dotted; }
+  footer label.updates { margin-left: 0; }
   footer .hint { margin-left: auto; }
   footer label.autosave {
     display: flex; align-items: center; gap: 4px; margin-left: auto;
@@ -239,8 +241,12 @@
 <footer>
   <span id="file">no file open</span>
   <span id="status"></span>
+  <a id="update" hidden target="_blank" rel="noopener"></a>
   <label class="autosave" title="Save shortly after you stop typing. ⌘S always saves immediately.">
     <input type="checkbox" id="autosave" checked> auto-save
+  </label>
+  <label class="autosave updates" title="Once a day, fetch fethr.dev/version.json to learn whether a newer fethr exists. Nothing is sent.">
+    <input type="checkbox" id="updatecheck" checked> updates
   </label>
   <button id="toggle-agent" title="⌘J">agent</button>
 </footer>

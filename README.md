@@ -14,7 +14,9 @@ fethr starts a local server bound to 127.0.0.1 and opens your browser — the re
 engine your OS already ships — as the shell. No Electron, no app download. The editor core
 itself is CodeMirror 6 (JS/TS, Python, Markdown, HTML, CSS, JSON highlighting), ~650 KB —
 that's the code that actually runs the editor. File access is confined to the directory
-you launch with. **The editor itself makes no network calls — but the agent panel does:**
+you launch with. **The editor makes one network call on its own:** once a day it fetches
+`https://fethr.dev/version.json` to learn whether a newer version exists (a public file; nothing
+is sent; the "updates" checkbox in the footer turns it off). **The agent panel makes others:**
 the current file, your selection, and anything you `@`-attach are sent to Anthropic's API
 when you use it (via your existing Claude Code login), same as using Claude Code directly.
 Don't use the agent panel on files you don't want leaving your machine.
@@ -117,8 +119,18 @@ Unsigned local builds work immediately; distribution builds need code signing.
 `fetch`" — so the package lives under the author scope. The installed command is still
 `fethr`.)
 
+## Tests
+
+```bash
+npm test          # node tests: workspace confinement, tree walker, CSP, /api/meta, update check
+npm run test:ui   # real-browser suite (puppeteer-core); FETHR_CHROME=<path to chrome-headless-shell>
+```
+
+Both run in CI on every push (`.github/workflows/ci.yml`).
+
 ## More docs
 
+- [`docs/TODO.md`](docs/TODO.md) — the single tracker: what is open, and the release order
 - [`CHANGELOG.md`](CHANGELOG.md) — what shipped in each release
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the sidecar pattern, the safety model,
   and the debugging lessons behind the trickier fixes (worth reading before touching

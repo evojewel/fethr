@@ -108,12 +108,22 @@ export function serve(root, onReady, opts = {}) {
   root = path.resolve(root);
   let lastPing = null;
 
-  // Exit when the editor window has been gone for a while (only once it
-  // has pinged at least once, so headless/API use is unaffected).
-  const reaper = setInterval(() => {
-    if (lastPing && Date.now() - lastPing > 30_000) process.exit(0);
-  }, 5_000);
-  reaper.unref();
+  // CLI mode: exit when the editor tab has been gone for a while (only once
+  // it has pinged at least once, so headless/API use is unaffected).
+  //
+  // Not in sidecar mode. The native window keeps the page alive but macOS
+  // throttles its timers and naps the app while it is in the background, so
+  // the heartbeat starves and this reaper killed the server under a window
+  // that was still open — every later click said "could not open". The Rust
+  // side kills the child on window close (src-tauri/src/lib.rs), which is
+  // the right signal there. FETHR_IDLE_MS exists for the test.
+  if (!opts.sidecar) {
+    const idleMs = Number(process.env.FETHR_IDLE_MS) || 30_000;
+    const reaper = setInterval(() => {
+      if (lastPing && Date.now() - lastPing > idleMs) process.exit(0);
+    }, Math.min(5_000, idleMs));
+    reaper.unref();
+  }
 
   const server = http.createServer((req, res) => {
     const u = new URL(req.url, "http://localhost");
@@ -219,6 +229,7 @@ export function serve(root, onReady, opts = {}) {
     if (onReady) onReady(urlStr);
     else {
       console.log(`\n  fethr — editing ${root}\n  ${urlStr}\n`);
+      if (process.env.FETHR_NO_OPEN) return; // print the URL, open nothing (tests, remote shells)
       if (opts.app && process.platform === "darwin") {
         // Chromeless app-mode window via Chrome/Edge when available. Explicit
         // --window-size avoids Chrome reusing a stale/tiny remembered size for

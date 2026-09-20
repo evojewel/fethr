@@ -4,6 +4,12 @@ All notable changes to fethr are documented here. Dates are when each version wa
 
 ## v0.9.4-alpha — unreleased
 
+**Fix: the native app's server died under an open window.** The server's self-exit rule (no
+heartbeat for 30 s) is for the CLI case where the tab closes. In the app, macOS throttles the
+webview's timers and naps the process in the background, so the heartbeat starved and the sidecar
+exited while the window stayed up; every later click reported "could not open". The reaper now runs
+only outside sidecar mode; the app kills its child on window close, as it already did.
+
 **Feature: a view menu with themes.** The "view" button in the footer opens a picker: Auto,
 Moss (the dark the editor shipped with), Paper (the website's surface), Slate (cooler dark) and
 Dawn (warm light). Colours are CSS keyed off `<html data-theme>` (`web/theme.js` holds the list);

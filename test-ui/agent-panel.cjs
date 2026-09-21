@@ -41,6 +41,9 @@ async function main() {
   const puppeteer = require("puppeteer-core");
   const { serve } = require("../src/server.js");
 
+  // CodeMirror's Mod- is Meta on macOS and Control elsewhere; CI runs on Linux.
+  const MOD = process.platform === "darwin" ? "Meta" : "Control";
+
   const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "fethr-ui-test-"));
   fs.writeFileSync(path.join(fixture, "app.js"), "console.log('hi')\n");
   fs.mkdirSync(path.join(fixture, "lib"));
@@ -90,9 +93,9 @@ async function main() {
     await page.click("#toggle-sidebar");
     const widthAfterClick = await page.$eval("aside", (el) => el.getBoundingClientRect().width);
     check("sidebar collapses via button (width shrinks)", widthAfterClick < widthBefore - 100);
-    await page.keyboard.down("Meta");
+    await page.keyboard.down(MOD);
     await page.keyboard.press("KeyB");
-    await page.keyboard.up("Meta");
+    await page.keyboard.up(MOD);
     const widthAfterCmdB = await page.$eval("aside", (el) => el.getBoundingClientRect().width);
     check("⌘B re-expands the sidebar", widthAfterCmdB > widthAfterClick + 100);
     const sidebarPersisted = await page.evaluate(() => localStorage.getItem("fethr.sidebarCollapsed"));
@@ -346,9 +349,9 @@ async function main() {
       fs.readFileSync(path.join(secFixture, "app.js"), "utf8") === "x = 1"
     );
     await page.focus(".cm-content");
-    await page.keyboard.down("Meta");
+    await page.keyboard.down(MOD);
     await page.keyboard.press("KeyS");
-    await page.keyboard.up("Meta");
+    await page.keyboard.up(MOD);
     await page.waitForFunction(() => document.querySelector("#status").textContent === "saved", { timeout: 3000 });
     check(
       "explicit ⌘S still saves the accepted change",

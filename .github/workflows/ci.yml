@@ -29,8 +29,10 @@ jobs:
       # --omit=optional skips the Agent SDK's bundled claude binary (~200 MB);
       # nothing here can use it without a login anyway.
       - run: npm ci --omit=optional
-      - run: npm test
+      # Build first: dist/ is gitignored and the server test that reads the
+      # page (CSP header) opens dist/index.html.
       - run: npm run build
+      - run: npm test
       - name: Install chrome-headless-shell
         id: chrome
         run: |

@@ -2,7 +2,7 @@
 
 All notable changes to fethr are documented here. Dates are when each version was tagged.
 
-## v0.9.4-alpha — unreleased
+## v0.9.4-alpha — 2026-09-29
 
 **Fix: the native app's server died under an open window.** The server's self-exit rule (no
 heartbeat for 30 s) is for the CLI case where the tab closes. In the app, macOS throttles the

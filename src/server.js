@@ -117,6 +117,17 @@ export function serve(root, onReady, opts = {}) {
   // that was still open — every later click said "could not open". The Rust
   // side kills the child on window close (src-tauri/src/lib.rs), which is
   // the right signal there. FETHR_IDLE_MS exists for the test.
+  // Sidecar mode: the app kills this child on window close, but not on a
+  // force-quit or a crash — then launchd adopts the child and it would serve
+  // forever. So the sidecar watches its parent: the moment the parent pid
+  // changes (re-parenting to 1), it exits.
+  if (opts.sidecar) {
+    const parent = process.ppid;
+    const orphanWatch = setInterval(() => {
+      if (process.ppid !== parent) process.exit(0);
+    }, Number(process.env.FETHR_IDLE_MS) || 2_000);
+    orphanWatch.unref();
+  }
   if (!opts.sidecar) {
     const idleMs = Number(process.env.FETHR_IDLE_MS) || 30_000;
     const reaper = setInterval(() => {

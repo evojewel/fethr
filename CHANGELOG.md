@@ -2,6 +2,13 @@
 
 All notable changes to fethr are documented here. Dates are when each version was tagged.
 
+## Unreleased
+
+**Fix: a force-quit of the native app left its server running.** The app kills the sidecar on
+window close, but a force-quit or a crash never sends that event, and since 0.9.4 the sidecar no
+longer reaps itself on a missing heartbeat. It now watches its parent pid and exits the moment it
+is re-parented. Found by killing the released 0.9.4 app during the release check.
+
 ## v0.9.4-alpha — 2026-09-29
 
 **Fix: the native app's server died under an open window.** The server's self-exit rule (no

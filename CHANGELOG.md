@@ -4,6 +4,14 @@ All notable changes to fethr are documented here. Dates are when each version wa
 
 ## Unreleased
 
+**A token per launch on the local API — the line between alpha and beta.** Until now any page open
+in the same browser could call `127.0.0.1:<port>/api/*` and read the workspace, write files or run
+the agent; the only secret was a port number. The server now mints a random token at start, puts it
+in the URL fragment (never sent to a server, so never in a log) and requires it in an
+`x-fethr-token` header on every `/api` call; a request from another origin is refused before the
+token is looked at. The page and the bundle stay open, since they hold nothing. Version moves to
+0.10.0-alpha: a risk retired, not a feature added.
+
 **Fix: a force-quit of the native app left its server running.** The app kills the sidecar on
 window close, but a force-quit or a crash never sends that event, and since 0.9.4 the sidecar no
 longer reaps itself on a missing heartbeat. It now watches its parent pid and exits the moment it

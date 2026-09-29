@@ -40,6 +40,12 @@ function findChrome() {
 async function main() {
   const puppeteer = require("puppeteer-core");
   const { serve } = require("../src/server.js");
+  // The URL carries the per-launch token in its fragment; node-side calls
+  // to /api need it as a header, the way the page sends it.
+  const api = (u, p, init = {}) => {
+    const url = new URL(u);
+    return fetch(url.origin + "/" + p, { ...init, headers: { ...(init.headers || {}), "x-fethr-token": url.hash.replace(/^#t=/, "") } });
+  };
 
   // CodeMirror's Mod- is Meta on macOS and Control elsewhere; CI runs on Linux.
   const MOD = process.platform === "darwin" ? "Meta" : "Control";
@@ -189,11 +195,13 @@ async function main() {
 
     check("mic button is present and enabled (SpeechRecognition in Chromium)", (await page.$eval("#mic", (el) => el.disabled)) === false);
 
-    await fetch(url + "api/chat", {
+    await api(url, "api/chat", {
       method: "PUT",
       body: JSON.stringify({ session: null, entries: [{ type: "assistant", text: "see lib/util.js:1 for the export" }] }),
     }).catch(() => {});
-    await page.goto(url, { waitUntil: "domcontentloaded" });
+    // The URL now carries a fragment, and a goto that differs only by fragment
+    // is a same-document navigation — nothing reloads. Reload explicitly.
+    await page.reload({ waitUntil: "domcontentloaded" });
     await page.click("#toggle-agent");
     await page.waitForSelector("a.fileref", { timeout: 3000 });
     check("file:line in a reply renders as a clickable link", (await page.$eval("a.fileref", (el) => el.textContent)) === "lib/util.js:1");
@@ -285,11 +293,11 @@ async function main() {
     await page.goto(gitUrl, { waitUntil: "domcontentloaded" });
     check("real branch name shown in the sidebar header", (await page.$eval("#branch", (el) => el.textContent)) === "test-branch-xyz");
 
-    const meta = await (await fetch(gitUrl + "api/meta")).json();
+    const meta = await (await api(gitUrl, "api/meta")).json();
     check("/api/meta reports the real branch", meta.gitBranch === "test-branch-xyz");
 
     const nonGitUrl = await new Promise((resolve) => serve(fixture, resolve));
-    const metaNonGit = await (await fetch(nonGitUrl + "api/meta")).json();
+    const metaNonGit = await (await api(nonGitUrl, "api/meta")).json();
     check("non-git workspace reports null, not an error", metaNonGit.gitBranch === null);
 
     await page.close();
@@ -307,11 +315,11 @@ async function main() {
 
     const secUrl = await new Promise((resolve) => serve(secFixture, resolve));
 
-    const r1 = await fetch(secUrl + "api/file?p=" + encodeURIComponent("escape-link/secret.txt"));
+    const r1 = await api(secUrl, "api/file?p=" + encodeURIComponent("escape-link/secret.txt"));
     const body1 = await r1.json().catch(() => ({}));
     check("symlink escaping the workspace is rejected", r1.status === 400 && body1.error === "path escapes root");
 
-    await fetch(secUrl + "api/chat", {
+    await api(secUrl, "api/chat", {
       method: "PUT",
       body: JSON.stringify({
         session: null,

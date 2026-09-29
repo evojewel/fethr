@@ -62,20 +62,25 @@ let dirty = false;
 // no app-vs-CLI branching to carry.
 import { decide, fetchManifest, isEnabled, ENABLED_KEY } from "./update.js";
 
+// The per-launch token from the URL fragment (src/server.js). Every /api
+// call carries it; without it the server answers 401.
+const TOKEN = new URLSearchParams(location.hash.slice(1)).get("t") || "";
+const f = (url, init = {}) => fetch(url, { ...init, headers: { ...(init.headers || {}), "x-fethr-token": TOKEN } });
+
 const api = {
-  meta: () => fetch("/api/meta").then((r) => r.json()),
-  tree: () => fetch("/api/tree").then((r) => r.json()),
+  meta: () => f("/api/meta").then((r) => r.json()),
+  tree: () => f("/api/tree").then((r) => r.json()),
   read: async (p) => {
-    const r = await fetch(`/api/file?p=${encodeURIComponent(p)}`);
+    const r = await f(`/api/file?p=${encodeURIComponent(p)}`);
     if (!r.ok) throw new Error("not found");
     return (await r.json()).content;
   },
   save: async (p, content) => {
-    const r = await fetch(`/api/file?p=${encodeURIComponent(p)}`, { method: "PUT", body: content });
+    const r = await f(`/api/file?p=${encodeURIComponent(p)}`, { method: "PUT", body: content });
     if (!r.ok) throw new Error("save failed");
   },
-  loadChat: () => fetch("/api/chat").then((r) => r.json()).catch(() => null),
-  saveChat: (data) => fetch("/api/chat", { method: "PUT", body: JSON.stringify(data) }).catch(() => {}),
+  loadChat: () => f("/api/chat").then((r) => r.json()).catch(() => null),
+  saveChat: (data) => f("/api/chat", { method: "PUT", body: JSON.stringify(data) }).catch(() => {}),
 };
 
 const setStatus = (t) => { $("#status").textContent = t; };
@@ -779,7 +784,7 @@ async function askAgent(prompt) {
     : undefined;
 
   try {
-    const r = await fetch("/api/agent", {
+    const r = await f("/api/agent", {
       method: "POST",
       headers: { "content-type": "application/json" },
       signal: abortCtl.signal,
@@ -894,8 +899,8 @@ inputEl.addEventListener("keydown", (e) => {
 
 // Heartbeat — lets the server (CLI-spawned or app-shell sidecar alike) exit
 // when the window closes, instead of lingering as an orphaned process.
-setInterval(() => fetch("/api/alive", { method: "POST" }).catch(() => {}), 5000);
-fetch("/api/alive", { method: "POST" }).catch(() => {});
+setInterval(() => f("/api/alive", { method: "POST" }).catch(() => {}), 5000);
+f("/api/alive", { method: "POST" }).catch(() => {});
 
 boot();
 

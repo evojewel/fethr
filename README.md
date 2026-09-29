@@ -69,6 +69,8 @@ anything about the project; the current file and selection travel as context aut
   login — no API key to configure. (No Claude Code auth on the machine → the panel tells you.)
 - **Read-only by construction:** the agent can Read/Grep/Glob inside your workspace and
   nothing else — every mutating tool is disabled server-side.
+- **The local server answers only the page it opened.** A token minted at launch rides in the
+  URL fragment and must accompany every API call; another page or origin gets 401 or 403.
 - **Edits arrive as proposals.** The agent's only change mechanism is `propose_edit`; you
   see a diff card, and Accept applies it *in the editor* where ⌘Z works and ⌘S saves.
   The agent process never touches your disk.

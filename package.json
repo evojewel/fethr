@@ -1,6 +1,6 @@
 {
   "name": "@evojewel/fethr",
-  "version": "0.9.4-alpha",
+  "version": "0.10.0-alpha",
   "publishConfig": {
     "access": "public"
   },

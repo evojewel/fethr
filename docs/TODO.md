@@ -11,15 +11,15 @@
 
 ## Now
 
-- [ ] **Publish 0.9.3+ to npm.** The `alpha` dist-tag was still 0.9.2 on 2026-09-20, so `npx`
-      users lack the XSS, replay-on-restore and autosave-boundary fixes of v0.9.3. Needs the owner's
-      OTP or `NPM_TOKEN` for `publish-npm.yml`. Then bump `npm` in `version.json`.
-- [ ] **Surface the agent's real error.** A 400 from the API ("Claude Code 2.1.236 does not support
-      this model") reaches the panel as "process exited with code 1". Read the child's stderr and show
-      the last line. Found 2026-09-18 with an outdated Homebrew `claude`.
-- [ ] **Local API auth.** Any page on the machine can call `127.0.0.1:<port>/api/*`: no token, no
-      Origin check. Tracked since v0.9.3. Mint a token per launch, put it in the page URL, require
-      it on `/api/*`.
+- [x] **Publish to npm** — 0.9.4-alpha published 2026-09-29 by the owner after `npm login` (the
+      old token was dead; an unauthenticated PUT reads as E404). The registry took ~20 min to serve
+      it. `version.json` npm line moved. Still no `NPM_TOKEN` secret, so each publish needs a login.
+- [ ] **Cut 0.10.0-alpha** with the local API token and the force-quit orphan fix.
+- [x] **Surface the agent's real error** — since 0.9.4 the child's stderr tail rides with a failed
+      result and the panel shows it after "ended:".
+- [x] **Local API auth** *(2026-09-29, unreleased)* — a token per launch in the URL fragment, required
+      in `x-fethr-token` on every `/api` call; foreign Origin refused first. `test/server.test.js`
+      covers no token, wrong token, foreign origin, own origin. Version bumped to 0.10.0-alpha.
 - [ ] **`.fethr/chat.json` leaks into repos** that have no ignore rule. Write a `.fethr/.gitignore`
       containing `*` on first save.
 

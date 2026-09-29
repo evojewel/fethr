@@ -7,6 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile, execFileSync } from "node:child_process";
+import crypto from "node:crypto";
 
 const DIST = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "dist");
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
@@ -14,6 +15,20 @@ const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", "target", "_
 // "target": opening fethr on its own repo put ~15k Rust build files from
 // src-tauri/target in the sidebar and froze the tree render.
 const MAX_TREE_ENTRIES = 5000;
+
+// A token per launch. Before this, any page open in the same browser could
+// call 127.0.0.1:<port>/api/* — read the workspace, write files, run the
+// agent — because the only "secret" was a port number. The token rides in
+// the URL fragment, which browsers never send to a server (so it is not in
+// any log) but the page can read; every /api request must carry it in the
+// x-fethr-token header. The page and the bundle stay open: they hold nothing.
+const TOKEN = crypto.randomBytes(24).toString("base64url");
+const TOKEN_HEADER = "x-fethr-token";
+
+function tokenMatches(given) {
+  if (typeof given !== "string" || given.length !== TOKEN.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(given), Buffer.from(TOKEN));
+}
 const VERSION = JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "package.json"), "utf8")).version;
 
 // The page is same-origin with everything it needs. connect-src also allows
@@ -139,6 +154,18 @@ export function serve(root, onReady, opts = {}) {
   const server = http.createServer((req, res) => {
     const u = new URL(req.url, "http://localhost");
 
+    if (u.pathname.startsWith("/api/")) {
+      // A browser sends Origin on cross-origin fetches; a page on another
+      // origin is refused before the token is even looked at.
+      const origin = req.headers.origin;
+      if (origin && origin !== `http://127.0.0.1:${server.address().port}`) {
+        return send(res, 403, JSON.stringify({ error: "wrong origin" }));
+      }
+      if (!tokenMatches(req.headers[TOKEN_HEADER])) {
+        return send(res, 401, JSON.stringify({ error: "missing or wrong token" }));
+      }
+    }
+
     if (req.method === "GET" && (u.pathname === "/" || u.pathname === "/index.html")) {
       return send(res, 200, fs.readFileSync(path.join(DIST, "index.html")), "text/html; charset=utf-8", { "content-security-policy": CSP });
     }
@@ -236,7 +263,7 @@ export function serve(root, onReady, opts = {}) {
   });
 
   server.listen(0, "127.0.0.1", () => {
-    const urlStr = `http://127.0.0.1:${server.address().port}/`;
+    const urlStr = `http://127.0.0.1:${server.address().port}/#t=${TOKEN}`;
     if (onReady) onReady(urlStr);
     else {
       console.log(`\n  fethr — editing ${root}\n  ${urlStr}\n`);

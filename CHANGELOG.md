@@ -2,7 +2,7 @@
 
 All notable changes to fethr are documented here. Dates are when each version was tagged.
 
-## Unreleased
+## v0.10.0-alpha — 2026-10-02
 
 **A token per launch on the local API — the line between alpha and beta.** Until now any page open
 in the same browser could call `127.0.0.1:<port>/api/*` and read the workspace, write files or run

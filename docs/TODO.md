@@ -14,7 +14,7 @@
 - [x] **Publish to npm** — 0.9.4-alpha published 2026-09-29 by the owner after `npm login` (the
       old token was dead; an unauthenticated PUT reads as E404). The registry took ~20 min to serve
       it. `version.json` npm line moved. Still no `NPM_TOKEN` secret, so each publish needs a login.
-- [ ] **Cut 0.10.0-alpha** with the local API token and the force-quit orphan fix.
+- [x] **Cut 0.10.0-alpha** — tagged and released 2026-10-02 with the DMG; npm publish pending the owner's login.
 - [x] **Surface the agent's real error** — since 0.9.4 the child's stderr tail rides with a failed
       result and the panel shows it after "ended:".
 - [x] **Local API auth** *(2026-09-29, unreleased)* — a token per launch in the URL fragment, required

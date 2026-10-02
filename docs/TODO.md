@@ -25,10 +25,15 @@
 
 ## Next
 
-- [ ] **Windows and Linux installers.** `bundle.targets` is already `all`; the blocker is
-      `find_node()` in `src-tauri/src/lib.rs`, which only knows Homebrew and nvm paths. Add
-      `/usr/bin/node`, `%ProgramFiles%\nodejs\node.exe` and nvm-windows, then a matrix job like the
-      one in skript's CI (WebKitGTK 4.1 apt list for the Linux runner).
+- [x] **Windows installer** *(2026-10-02, unreleased)* — `build-windows.yml` builds the NSIS
+      installer and smoke-tests it on a Windows runner (install, launch, node found, page 200, `/api`
+      401 without token, clean exit on force-kill). CI also runs the node tests on Windows.
+- [ ] **Agent panel on a real Windows machine.** No runner has a Claude Code login. One person, one
+      prompt: does `claude.exe` get found and does a reply arrive.
+- [ ] **Linux installer.** Same shape as Windows: `find_node()` already checks `/usr/bin/node` and
+      PATH; needs a runner job with the WebKitGTK 4.1 packages and a smoke test.
+- [ ] **Windows code signing.** The installer is unsigned, so SmartScreen warns. Same identity
+      question as macOS below.
 - [ ] **Signing identity.** The DMG is ad-hoc signed and not notarized, so macOS blocks the first
       launch. Notarizing needs a Developer ID: an individual enrolment prints the person's legal name
       in the signature, an organisation prints the company. Decide whose, then `build-shell.yml` gets

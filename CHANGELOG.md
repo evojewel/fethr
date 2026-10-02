@@ -2,6 +2,18 @@
 
 All notable changes to fethr are documented here. Dates are when each version was tagged.
 
+## Unreleased
+
+**Windows.** The native shell and its server run there, proven on a real Windows runner by
+`build-windows.yml`: the NSIS installer (5.6 MB) installs silently, the app launches on a folder,
+finds node on PATH, starts the sidecar without a console window, serves the page, refuses `/api`
+without the launch token, and leaves no server behind when force-killed. What changed to get there:
+node and claude are looked up per platform; the orphan check asks whether the parent still exists,
+because Windows never re-parents; the CLI opens the browser through `cmd /c start`; the sidecar is
+staged from inside its own directory (the `--prefix` form linked back to the whole repository on
+Windows and the bundler walked that loop without end). **Not yet proven:** the agent panel on
+Windows, which needs a machine with a Claude Code login.
+
 ## v0.10.0-alpha — 2026-10-02
 
 **A token per launch on the local API — the line between alpha and beta.** Until now any page open

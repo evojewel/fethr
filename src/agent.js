@@ -29,12 +29,30 @@ let cachedClaudePath; // computed once per process, not once per request
 function findClaudeExecutable() {
   if (cachedClaudePath !== undefined) return cachedClaudePath;
   const home = os.homedir();
-  const candidates = [
-    "/opt/homebrew/bin/claude",
-    "/usr/local/bin/claude",
-    path.join(home, ".claude/local/claude"),
-    path.join(home, ".local/bin/claude"),
-  ];
+  const win = process.platform === "win32";
+  // PATH first on Windows (a GUI app inherits the real one there), last on
+  // macOS (where a GUI app gets launchd's bare PATH and the fixed homes are
+  // the reliable answer).
+  const onPath = (process.env.PATH || "")
+    .split(path.delimiter)
+    .filter(Boolean)
+    .map((d) => path.join(d, win ? "claude.exe" : "claude"));
+  const candidates = win
+    ? [
+        ...onPath,
+        path.join(home, ".local", "bin", "claude.exe"),
+        path.join(home, ".claude", "local", "claude.exe"),
+        // An npm-global install is a .cmd shim around this file; the SDK runs a
+        // .js path with node, which a .cmd cannot be handed to it as.
+        path.join(process.env.APPDATA || "", "npm", "node_modules", "@anthropic-ai", "claude-code", "cli.js"),
+      ]
+    : [
+        "/opt/homebrew/bin/claude",
+        "/usr/local/bin/claude",
+        path.join(home, ".claude/local/claude"),
+        path.join(home, ".local/bin/claude"),
+        ...onPath,
+      ];
   cachedClaudePath = candidates.find((c) => {
     try {
       return fs.statSync(c).isFile();

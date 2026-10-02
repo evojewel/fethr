@@ -7,9 +7,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { apiFetch } from "./auth.js";
 
-const BIN = new URL("../bin/fethr.js", import.meta.url).pathname;
+// fileURLToPath, not .pathname: on Windows the latter is "/D:/…", which is not a path.
+const BIN = fileURLToPath(new URL("../bin/fethr.js", import.meta.url));
 
 function launch(extraArgs) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "fethr-life-"));

@@ -36,17 +36,65 @@ fn resolve_root_from_args() -> Option<PathBuf> {
     std::env::args().nth(1).map(PathBuf::from).filter(|p| p.is_dir())
 }
 
-// GUI-launched apps on macOS get launchd's bare-bones PATH, not the shell
-// PATH a Terminal session has — so a plain `Command::new("node")` fails to
-// find a Homebrew- or nvm-installed node even though `node` works fine for
-// the same user in Terminal. Re-running through the user's login shell
-// (`$SHELL -l -c ...`) was the first fix tried here, but it's unreliable:
-// it sources the user's full profile, and anything slow or interactive in
-// there (nvm lazy-load, prompt frameworks, update checks) can hang the
-// spawn indefinitely with no useful error. Looking in the handful of places
-// node actually lives is faster and has no such failure mode.
+// Where node lives is a per-platform question.
+//
+// macOS: GUI-launched apps get launchd's bare-bones PATH, not the shell PATH a
+// Terminal session has — so a plain `Command::new("node")` fails to find a
+// Homebrew- or nvm-installed node even though `node` works fine for the same
+// user in Terminal. Re-running through the user's login shell
+// (`$SHELL -l -c ...`) was the first fix tried here, but it's unreliable: it
+// sources the user's full profile, and anything slow or interactive in there
+// (nvm lazy-load, prompt frameworks, update checks) can hang the spawn
+// indefinitely with no useful error. Looking in the handful of places node
+// actually lives is faster and has no such failure mode.
+//
+// Windows: the opposite. A GUI app inherits the user's real PATH, so PATH is
+// searched first, then the installer's and the version managers' usual homes.
+fn version_key(p: &Path) -> (u32, u32, u32) {
+    p.file_name()
+        .and_then(|n| n.to_str())
+        .map(|s| s.trim_start_matches('v').to_string())
+        .map(|s| {
+            let parts: Vec<u32> = s.split('.').filter_map(|x| x.parse().ok()).collect();
+            (
+                parts.first().copied().unwrap_or(0),
+                parts.get(1).copied().unwrap_or(0),
+                parts.get(2).copied().unwrap_or(0),
+            )
+        })
+        .unwrap_or((0, 0, 0))
+}
+
+fn search_path(exe: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path).map(|d| d.join(exe)).find(|c| c.is_file())
+}
+
+#[cfg(windows)]
 fn find_node() -> PathBuf {
-    for c in ["/opt/homebrew/bin/node", "/usr/local/bin/node"] {
+    if let Some(p) = search_path("node.exe") {
+        return p;
+    }
+    let env = |k: &str| std::env::var_os(k).map(PathBuf::from);
+    let candidates = [
+        env("ProgramFiles").map(|p| p.join("nodejs").join("node.exe")),
+        env("ProgramFiles(x86)").map(|p| p.join("nodejs").join("node.exe")),
+        env("LOCALAPPDATA").map(|p| p.join("Programs").join("nodejs").join("node.exe")),
+        env("NVM_SYMLINK").map(|p| p.join("node.exe")),
+        env("LOCALAPPDATA").map(|p| p.join("Volta").join("bin").join("node.exe")),
+        env("USERPROFILE").map(|p| p.join("scoop").join("apps").join("nodejs").join("current").join("node.exe")),
+    ];
+    for c in candidates.into_iter().flatten() {
+        if c.is_file() {
+            return c;
+        }
+    }
+    PathBuf::from("node.exe") // last resort
+}
+
+#[cfg(not(windows))]
+fn find_node() -> PathBuf {
+    for c in ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"] {
         if Path::new(c).is_file() {
             return PathBuf::from(c);
         }
@@ -55,20 +103,7 @@ fn find_node() -> PathBuf {
         let nvm_dir = PathBuf::from(home).join(".nvm/versions/node");
         if let Ok(entries) = fs::read_dir(&nvm_dir) {
             let mut versions: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
-            versions.sort_by_key(|p| {
-                p.file_name()
-                    .and_then(|n| n.to_str())
-                    .map(|s| s.trim_start_matches('v').to_string())
-                    .map(|s| {
-                        let parts: Vec<u32> = s.split('.').filter_map(|x| x.parse().ok()).collect();
-                        (
-                            parts.first().copied().unwrap_or(0),
-                            parts.get(1).copied().unwrap_or(0),
-                            parts.get(2).copied().unwrap_or(0),
-                        )
-                    })
-                    .unwrap_or((0, 0, 0))
-            });
+            versions.sort_by_key(|p| version_key(p));
             if let Some(latest) = versions.last() {
                 let node_bin = latest.join("bin/node");
                 if node_bin.is_file() {
@@ -77,22 +112,40 @@ fn find_node() -> PathBuf {
             }
         }
     }
-    PathBuf::from("node") // last resort: relies on PATH already having it
+    search_path("node").unwrap_or_else(|| PathBuf::from("node"))
+}
+
+// Windows hands back resource paths in the verbatim form (\\?\C:\...). Node
+// runs a script given that way, but resolving its ES module imports from a
+// verbatim path is where it has broken before, so pass the plain form.
+fn plain_path(p: &Path) -> PathBuf {
+    let s = p.to_string_lossy();
+    match s.strip_prefix(r"\\?\") {
+        Some(rest) if !rest.starts_with("UNC") => PathBuf::from(rest),
+        _ => p.to_path_buf(),
+    }
 }
 
 fn spawn_sidecar(resource_dir: &Path, root: &Path) -> std::io::Result<(Child, String)> {
-    let sidecar_dir = resource_dir.join("sidecar");
+    let sidecar_dir = plain_path(&resource_dir.join("sidecar"));
     let entry = sidecar_dir.join("bin").join("fethr.js");
     let node = find_node();
 
-    let mut child = Command::new(&node)
-        .arg(&entry)
-        .arg(root)
+    let mut cmd = Command::new(&node);
+    cmd.arg(&entry)
+        .arg(plain_path(root))
         .arg("--sidecar")
         .current_dir(&sidecar_dir)
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()?;
+        .stderr(Stdio::null());
+    // Without this a console window flashes up behind the editor on Windows.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let mut child = cmd.spawn()?;
 
     let stdout = child.stdout.take().expect("piped stdout");
     let mut reader = BufReader::new(stdout);
@@ -171,7 +224,7 @@ pub fn run() {
                             show_message(
                                 app.handle(),
                                 "fethr",
-                                "fethr needs a folder to open.\n\nRelaunch and choose one, or run it from Terminal with a path: fethr.app --args <folder>",
+                                "fethr needs a folder to open.\n\nRelaunch and choose one, or start it with a folder path as its argument.",
                             )?;
                             return Ok(());
                         }
@@ -198,7 +251,7 @@ pub fn run() {
                 Err(e) => {
                     let msg = format!(
                         "fethr couldn't start its editor server.\n\n{e}\n\n\
-                         The agent-enabled app shell needs Node.js on PATH (node). \
+                         fethr runs its editor server on Node.js and could not find it. \
                          Install it from nodejs.org, or run `npx @evojewel/fethr` instead."
                     );
                     show_message(app.handle(), "fethr — couldn't start", &msg)?;

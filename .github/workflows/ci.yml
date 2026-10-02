@@ -43,3 +43,17 @@ jobs:
         run: node test-ui/agent-panel.cjs
         env:
           FETHR_CHROME: ${{ steps.chrome.outputs.path }}
+
+  # The same node tests on Windows: path handling, the junction escape, the
+  # launch token, and who ends the server (Windows never re-parents an orphan).
+  verify-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --omit=optional
+      - run: npm run build
+      - run: npm test

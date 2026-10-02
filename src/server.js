@@ -138,8 +138,15 @@ export function serve(root, onReady, opts = {}) {
   // changes (re-parenting to 1), it exits.
   if (opts.sidecar) {
     const parent = process.ppid;
+    // Unix re-parents an orphan, so ppid changes. Windows never does: ppid
+    // keeps naming the dead process. Asking whether the parent still exists
+    // covers both (signal 0 sends nothing; ESRCH means it is gone).
+    const parentGone = () => {
+      if (process.ppid !== parent) return true;
+      try { process.kill(parent, 0); return false; } catch (e) { return e.code === "ESRCH"; }
+    };
     const orphanWatch = setInterval(() => {
-      if (process.ppid !== parent) process.exit(0);
+      if (parentGone()) process.exit(0);
     }, Number(process.env.FETHR_IDLE_MS) || 2_000);
     orphanWatch.unref();
   }
@@ -282,8 +289,10 @@ export function serve(root, onReady, opts = {}) {
           }
         );
       } else {
-        const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
-        execFile(opener, [urlStr], () => {});
+        // `start` is a cmd builtin, not a program, and its first quoted
+        // argument is a window title — hence the empty one.
+        if (process.platform === "win32") execFile("cmd", ["/c", "start", "", urlStr], () => {});
+        else execFile(process.platform === "darwin" ? "open" : "xdg-open", [urlStr], () => {});
       }
     }
   });

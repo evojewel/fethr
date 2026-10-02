@@ -33,7 +33,8 @@ test("workspace confinement rejects lexical and symlink escapes", async (t) => {
   const root = fixture();
   const outside = fs.mkdtempSync(path.join(os.tmpdir(), "fethr-outside-"));
   fs.writeFileSync(path.join(outside, "secret.txt"), "secret");
-  fs.symlinkSync(outside, path.join(root, "escape"));
+  // "junction" is the directory link Windows allows without elevation; ignored elsewhere.
+  fs.symlinkSync(outside, path.join(root, "escape"), "junction");
   const s = await start(root);
   t.after(() => s.close());
   for (const p of ["../../etc/passwd", "escape/secret.txt", "/etc/passwd"]) {

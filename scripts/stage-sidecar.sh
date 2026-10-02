@@ -34,8 +34,7 @@ echo "staged sidecar: $(du -sh "$DEST" | cut -f1)"
 # has Claude Code installed, and src/agent.js points the SDK at that
 # system install via pathToClaudeCodeExecutable. Fail loudly if it's
 # somehow back, since that would silently balloon the app by 8x.
-if [ -d "$DEST/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64" ] || \
-   [ -d "$DEST/node_modules/@anthropic-ai/claude-agent-sdk-darwin-x64" ]; then
+if ls "$DEST/node_modules/@anthropic-ai" 2>/dev/null | grep -qE '^claude-agent-sdk-(darwin|linux|win32)'; then
   echo "stage-sidecar.sh: the bundled claude binary is present despite --omit=optional" >&2
   echo "  (npm version too old for --omit, or the SDK changed how it declares this dep)" >&2
   exit 1

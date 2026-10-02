@@ -47,7 +47,10 @@ jobs:
       - name: Install deps, build the frontend, stage the sidecar
         shell: bash
         run: |
-          npm ci --omit=optional
+          # Plain npm ci: the Tauri CLI ships its platform binary as an optional
+          # dependency, so --omit=optional here would leave no tauri to run. The
+          # sidecar is staged with its own --omit=optional install.
+          npm ci
           npm run build
           ./scripts/stage-sidecar.sh
 

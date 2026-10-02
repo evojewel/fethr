@@ -26,7 +26,15 @@ require("fs").writeFileSync(
 );
 '
 
-npm install --omit=dev --omit=optional --no-audit --no-fund --prefix "$DEST"
+# Install from inside the staging dir, not with --prefix from the repo root.
+# On Windows the --prefix form left node_modules/@evojewel/fethr as a link back
+# to the whole repository, and the bundler then walked
+# sidecar/node_modules/@evojewel/fethr/src-tauri/sidecar/node_modules/… forever.
+(cd "$DEST" && npm install --omit=dev --omit=optional --no-audit --no-fund)
+if [ -e "$DEST/node_modules/@evojewel" ]; then
+  echo "stage-sidecar.sh: the sidecar links back to the repository (node_modules/@evojewel)" >&2
+  exit 1
+fi
 echo "staged sidecar: $(du -sh "$DEST" | cut -f1)"
 
 # --omit=optional skips claude-agent-sdk's platform package (the bundled

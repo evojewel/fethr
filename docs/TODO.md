@@ -44,6 +44,11 @@
       2026-10-17; the bundle was left with a broken signature seal). Build from Terminal, or re-sign
       after with `codesign --force --deep -s - <app>`. Granting fethr App Management would work but
       lets any full-mode agent modify any app; not recommended.
+- [ ] **Agent shells get the bare macOS PATH.** Launched from the app, the sidecar (and so the
+      agent's shell and its MCP servers) inherits launchd's `/usr/bin:/bin:/usr/sbin:/sbin`: no
+      npm, nvm node or Homebrew tools, so `npm` fails and node-based MCP servers don't start
+      (seen 2026-10-17). Fix: give the sidecar the login shell's PATH, read with a short timeout
+      (the earlier `$SHELL -l` attempt could hang without one), falling back to known tool dirs.
 - [ ] **Not yet run against a real agent:** full mode, Attach / Move here, and the native folder
       picker have been tested only with stubs. Run each once in the app before release.
 

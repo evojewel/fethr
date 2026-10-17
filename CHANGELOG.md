@@ -32,6 +32,10 @@ drops it); queued messages go out one at a time as each run ends. Stop puts them
 composer unsent. Consecutive tool steps fold into one row with short paths, and the status bar
 stays on one line in narrow windows.
 
+**Copy code.** Every code block in a reply has a copy button in its corner, faint until hovered;
+it copies the block's original text and shows ✓. If the clipboard is refused, the block is
+selected for ⌘C instead.
+
 **Fixes.** Preferences (theme, widths, auto-save) now survive a relaunch: they were kept per
 origin, and the random port made every launch a new one. Read-only mode now also blocks
 subagents under their current tool name. Replies render headings, lists and quotes.

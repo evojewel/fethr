@@ -898,7 +898,12 @@ function renderMd(el, raw) {
   // Fences out first (their lines are not headings or lists), blocks on the
   // escaped text, fences back before the inline rules as before.
   const fences = [];
-  let html = esc.replace(/```(\w*)\n([\s\S]*?)```/g, (_, _lang, code) => `\u0000${fences.push(`<pre>${code}</pre>`) - 1}\u0000`);
+  const fenceRaw = []; // each block's own text, for its copy button
+  let html = esc.replace(/```(\w*)\n([\s\S]*?)```/g, (_, _lang, code) => {
+    const i = fences.push(`<div class="code-block"><pre data-fence="${fenceRaw.length}">${code}</pre></div>`) - 1;
+    fenceRaw.push(code.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&").replace(/\n$/, ""));
+    return `\u0000${i}\u0000`;
+  });
   html = mdBlocks(html);
   html = html.replace(/\u0000(\d+)\u0000/g, (_, i) => fences[Number(i)]);
   html = html.replace(/\b([\w./-]+\.\w+):(\d+)(-\d+)?\b/g, (m, p, l1, l2) => {
@@ -908,6 +913,59 @@ function renderMd(el, raw) {
   html = html.replace(/`([^`\n<]+)`/g, "<code>$1</code>");
   html = html.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
   el.innerHTML = html;
+  // The copy button carries the block's original text: the inline rules above
+  // also run inside code blocks, so the displayed text can differ (** → bold).
+  el.querySelectorAll("pre[data-fence]").forEach((pre) => addCopyButton(pre, fenceRaw[Number(pre.dataset.fence)] ?? pre.textContent));
+}
+
+// ---------- copy button on code blocks ----------
+const COPY_SVG =
+  '<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="5" y="5" width="9" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M11 3.5V3a1.5 1.5 0 0 0-1.5-1.5H3A1.5 1.5 0 0 0 1.5 3v6.5A1.5 1.5 0 0 0 3 11h.5" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>' +
+  '<svg class="ok" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3 3 7-7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+// The async clipboard API first; the older execCommand path if the webview
+// refuses it. Returns whether the text reached the clipboard.
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch { /* fall through */ }
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.setAttribute("readonly", "");
+  ta.style.cssText = "position:fixed;top:0;left:0;opacity:0";
+  document.body.appendChild(ta);
+  ta.select();
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch { /* refused */ }
+  ta.remove();
+  return ok;
+}
+
+function addCopyButton(pre, text) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "copy-code";
+  b.title = "Copy";
+  b.setAttribute("aria-label", "Copy code");
+  b.innerHTML = COPY_SVG; // a fixed string, never transcript text
+  let timer = null;
+  b.onclick = async () => {
+    const ok = await copyText(text);
+    if (!ok) {
+      // Couldn't reach the clipboard: select the block so ⌘C still works.
+      const r = document.createRange();
+      r.selectNodeContents(pre);
+      const sel = getSelection();
+      sel.removeAllRanges();
+      sel.addRange(r);
+    }
+    b.classList.toggle("done", ok);
+    b.title = ok ? "Copied" : "Selected — press ⌘C";
+    clearTimeout(timer);
+    timer = setTimeout(() => { b.classList.remove("done"); b.title = "Copy"; }, 1500);
+  };
+  pre.parentNode.appendChild(b);
 }
 
 // GitHub-style tables: a header row, a delimiter row (---, :--, :-:, --:),

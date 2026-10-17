@@ -1457,6 +1457,62 @@ async function main() {
     await page.close();
   }
 
+  // ---- copy button on code blocks ----
+  {
+    const dir = path.join(tmp, "copy");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "c.js"), "x = 1\n");
+    const url = await new Promise((resolve) => serve(dir, resolve, { onOpen, sidecar: true }));
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1100, height: 700 });
+    // Record what reaches the clipboard; the second click is refused, to take the fallback.
+    await page.evaluateOnNewDocument(() => {
+      window.__copied = [];
+      window.__refuse = false;
+      const fake = { writeText: async (t) => { if (window.__refuse) throw new Error("denied"); window.__copied.push(t); } };
+      Object.defineProperty(navigator, "clipboard", { configurable: true, get: () => fake });
+    });
+    const block = "codesign --force **not bold** <b>x</b> & a|b\n  second line";
+    const reply = "Run this:\n```sh\n" + block + "\n```\nthen `inline code` and done.";
+    await page.setRequestInterception(true);
+    page.on("request", (r) => {
+      if (!r.url().includes("/api/agent")) return r.continue();
+      const evs = [{ type: "session", id: FORKED }, { type: "delta", text: reply }, { type: "done", ok: true }];
+      r.respond({ status: 200, contentType: "text/event-stream", body: evs.map((e) => `data: ${JSON.stringify(e)}\n\n`).join("") });
+    });
+    await page.goto(url, { waitUntil: "domcontentloaded" });
+    await page.waitForSelector('#tree [data-p="c.js"]');
+    if (!(await page.evaluate(() => document.body.classList.contains("agent-open")))) await page.click("#toggle-agent");
+    await page.focus("#input");
+    await page.keyboard.type("give me a command");
+    await page.keyboard.press("Enter");
+    await page.waitForSelector("#chat .code-block .copy-code", { timeout: 3000 });
+
+    const shape = await page.evaluate(() => ({
+      buttons: document.querySelectorAll("#chat .copy-code").length,
+      inPre: !!document.querySelector("#chat pre .copy-code"),
+      faint: getComputedStyle(document.querySelector("#chat .copy-code")).opacity,
+    }));
+    check("copy: one button per code block, none for inline code", shape.buttons === 1);
+    check("copy: the button sits outside the scrolling block", !shape.inPre);
+    check("copy: faint until the block is hovered", Number(shape.faint) < 0.5);
+    await page.click("#chat .copy-code");
+    await sleep(100);
+    const after = await page.evaluate(() => ({ copied: window.__copied[0], done: document.querySelector("#chat .copy-code").classList.contains("done") }));
+    check("copy: copies the block's exact original text (** and HTML kept)", after.copied === block);
+    check("copy: shows ✓ after copying", after.done);
+    await sleep(1700);
+    check("copy: ✓ fades back to the copy icon", await page.$eval("#chat .copy-code", (b) => !b.classList.contains("done") && b.title === "Copy"));
+
+    await page.evaluate(() => { window.__refuse = true; });
+    await page.click("#chat .copy-code");
+    await sleep(100);
+    const fb = await page.evaluate(() => ({ title: document.querySelector("#chat .copy-code").title, sel: String(getSelection()) }));
+    check("copy: a refused clipboard falls back (copied, or the block selected for ⌘C)",
+      fb.title === "Copied" || (fb.title.startsWith("Selected") && fb.sel.includes("second line")));
+    await page.close();
+  }
+
   await browser.close();
   fs.rmSync(tmp, { recursive: true, force: true });
   process.exit(failures ? 1 : 0);

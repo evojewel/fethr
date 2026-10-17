@@ -199,6 +199,21 @@
     padding: 8px 10px; overflow-x: auto; font-size: 12px; line-height: 1.45;
     font-family: ui-monospace, Menlo, monospace; margin: 6px 0;
   }
+  /* Copy button: outside the pre's scroll area, faint until the block is hovered. */
+  .msg .code-block { position: relative; white-space: normal; }
+  .msg .code-block pre { padding-right: 36px; white-space: pre; }
+  .copy-code {
+    position: absolute; top: 5px; right: 5px; width: 24px; height: 24px; padding: 0;
+    display: grid; place-items: center; cursor: pointer;
+    background: var(--panel); color: var(--muted); border: 1px solid var(--rule); border-radius: 5px;
+    opacity: .35; transition: opacity .15s ease, color .15s ease, border-color .15s ease;
+  }
+  .code-block:hover .copy-code, .copy-code:focus-visible { opacity: 1; }
+  .copy-code:hover { color: var(--accent); border-color: var(--accent); }
+  .copy-code svg { width: 14px; height: 14px; }
+  .copy-code .ok, .copy-code.done .icon { display: none; }
+  .copy-code.done .ok { display: block; }
+  .copy-code.done { opacity: 1; color: var(--accent); border-color: var(--accent); }
   #agent-status {
     display: none; align-items: center; gap: 8px;
     padding: 4px 12px; font-size: 12px; color: var(--muted);

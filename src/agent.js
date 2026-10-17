@@ -227,14 +227,44 @@ export function doneEvent(msg, { sawText, stderrTail = [] }) {
 
 // queryFn: the SDK's query(), replaceable so the tests can see exactly what
 // the SDK is given without starting Claude Code.
+// Pasted or dropped images ride with the prompt as base64. The page downscales
+// first, so these caps are for a misbehaving client, not normal use. 5 MB per
+// image is the Messages API's own limit; past it the API rejects the turn.
+export const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+export const MAX_IMAGES = 6;
+export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_AGENT_BODY = 40 * 1024 * 1024;
+const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+
+// Returns { images } (possibly empty) or { error } for a 400.
+export function checkImages(images) {
+  if (images === undefined || images === null) return { images: [] };
+  if (!Array.isArray(images)) return { error: "images must be a list" };
+  if (images.length > MAX_IMAGES) return { error: `at most ${MAX_IMAGES} images per message` };
+  for (const im of images) {
+    if (!im || typeof im !== "object" || !IMAGE_TYPES.has(im.mediaType)) {
+      return { error: "images must be PNG, JPEG, GIF or WebP" };
+    }
+    if (typeof im.data !== "string" || !im.data || !BASE64_RE.test(im.data)) return { error: "image data must be base64" };
+    if (Math.floor((im.data.length * 3) / 4) > MAX_IMAGE_BYTES) return { error: "an image is over 5 MB" };
+  }
+  return { images: images.map((im) => ({ mediaType: im.mediaType, data: im.data })) };
+}
+
 export function handleAgent(root, req, res, { queryFn = query } = {}) {
   let body = "";
+  let tooBig = false;
   req.setEncoding("utf8");
   req.on("data", (c) => {
+    if (tooBig) return;
     body += c;
-    if (body.length > 1024 * 1024) req.destroy();
+    if (body.length > MAX_AGENT_BODY) { tooBig = true; body = ""; }
   });
   req.on("end", () => {
+    if (tooBig) {
+      res.writeHead(413, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error: "message too large (images over the limit)" }));
+    }
     let parsed;
     try {
       parsed = JSON.parse(body);
@@ -242,6 +272,12 @@ export function handleAgent(root, req, res, { queryFn = query } = {}) {
       res.writeHead(400, { "content-type": "application/json" });
       return res.end(JSON.stringify({ error: "bad json" }));
     }
+    const checked = checkImages(parsed && parsed.images);
+    if (checked.error) {
+      res.writeHead(400, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error: checked.error }));
+    }
+    parsed.images = checked.images;
     runAgent(root, parsed, res, { queryFn }).catch((e) => {
       try {
         emit(res, { type: "error", message: String(e.message || e) });
@@ -261,7 +297,26 @@ function emit(res, obj) {
 // on the first failure (see markFableUnavailable in web/editor.js).
 const MODEL_MAP = { opus: "opus", sonnet: "sonnet", haiku: "haiku", fable: "claude-fable-5" };
 
-export async function runAgent(root, { prompt, sessionId, fork, resumed, mode: askedMode, context, extraFiles, gitBranch, model }, res, { queryFn = query } = {}) {
+// A plain string when there are no images (as before). With images, the SDK
+// needs a structured user message: image blocks first, then the text, which
+// is how the Messages API reads them best.
+export function promptInput(text, images) {
+  if (!images || !images.length) return text;
+  const message = {
+    type: "user",
+    parent_tool_use_id: null,
+    message: {
+      role: "user",
+      content: [
+        ...images.map((im) => ({ type: "image", source: { type: "base64", media_type: im.mediaType, data: im.data } })),
+        { type: "text", text },
+      ],
+    },
+  };
+  return (async function* () { yield message; })();
+}
+
+export async function runAgent(root, { prompt, sessionId, fork, resumed, mode: askedMode, context, extraFiles, gitBranch, model, images }, res, { queryFn = query } = {}) {
   const mode = normalizeMode(askedMode);
   res.writeHead(200, {
     "content-type": "text/event-stream",
@@ -311,7 +366,7 @@ export async function runAgent(root, { prompt, sessionId, fork, resumed, mode: a
   // and hand it to the panel when the run does not succeed.
   const stderrTail = [];
   const q = queryFn({
-    prompt: fullPrompt,
+    prompt: promptInput(fullPrompt, images),
     options: {
       cwd: root,
       stderr: (chunk) => {

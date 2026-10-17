@@ -1226,6 +1226,106 @@ async function main() {
     await page.close();
   }
 
+  // ---- images: paste and drop into the composer ----
+  {
+    const dir = path.join(tmp, "img");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "a.js"), "x = 1\n");
+    const url = await new Promise((resolve) => serve(dir, resolve, { onOpen }));
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1200, height: 700 });
+    const bodies = [];
+    await page.setRequestInterception(true);
+    page.on("request", (r) => {
+      if (!r.url().includes("/api/agent")) return r.continue();
+      bodies.push(JSON.parse(r.postData() || "{}"));
+      const evs = [{ type: "session", id: FORKED }, { type: "delta", text: "Red." }, { type: "done", ok: true }];
+      r.respond({ status: 200, contentType: "text/event-stream", body: evs.map((e) => `data: ${JSON.stringify(e)}\n\n`).join("") });
+    });
+    await page.goto(url, { waitUntil: "domcontentloaded" });
+    await page.waitForSelector('#tree [data-p="a.js"]');
+    if (!(await page.evaluate(() => document.body.classList.contains("agent-open")))) await page.click("#toggle-agent");
+    await page.waitForFunction(() => document.querySelector("#composer").offsetParent !== null, { timeout: 3000 });
+
+    // A small PNG pasted, and a large JPEG dropped: built in the page with a canvas.
+    await page.evaluate(async () => {
+      const make = (w, h, type) => new Promise((res) => {
+        const c = document.createElement("canvas");
+        c.width = w; c.height = h;
+        const g = c.getContext("2d");
+        g.fillStyle = "#d22"; g.fillRect(0, 0, w, h);
+        c.toBlob((b) => res(new File([b], type === "image/png" ? "small.png" : "big.jpg", { type })), type, 0.9);
+      });
+      const small = await make(40, 30, "image/png");
+      const big = await make(3200, 1800, "image/jpeg");
+      const pdt = new DataTransfer();
+      pdt.items.add(small);
+      document.querySelector("#input").dispatchEvent(new ClipboardEvent("paste", { clipboardData: pdt, bubbles: true, cancelable: true }));
+      const ddt = new DataTransfer();
+      ddt.items.add(big);
+      document.querySelector("#composer").dispatchEvent(new DragEvent("drop", { dataTransfer: ddt, bubbles: true, cancelable: true }));
+      const txt = new DataTransfer();
+      txt.setData("text/plain", "hello");
+      document.querySelector("#input").dispatchEvent(new ClipboardEvent("paste", { clipboardData: txt, bubbles: true, cancelable: true }));
+    });
+    await page.waitForFunction(() => document.querySelectorAll("#ctx-bar .ctx-pill.image").length === 2, { timeout: 5000 });
+    check("images: a paste and a drop each add a thumbnail", true);
+
+    // remove one, add it back by pasting again, then send with no text
+    await page.click("#ctx-bar .ctx-pill.image:last-child button");
+    check("images: × removes a thumbnail", await page.$$eval("#ctx-bar .ctx-pill.image", (p) => p.length === 1));
+    await page.evaluate(async () => {
+      const c = document.createElement("canvas");
+      c.width = 3200; c.height = 1800;
+      c.getContext("2d").fillRect(0, 0, 3200, 1800);
+      const b = await new Promise((r) => c.toBlob(r, "image/jpeg", 0.9));
+      const dt = new DataTransfer();
+      dt.items.add(new File([b], "big.jpg", { type: "image/jpeg" }));
+      document.querySelector("#composer").dispatchEvent(new DragEvent("drop", { dataTransfer: dt, bubbles: true, cancelable: true }));
+    });
+    await page.waitForFunction(() => document.querySelectorAll("#ctx-bar .ctx-pill.image").length === 2, { timeout: 5000 });
+    await page.focus("#input");
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => !document.querySelector("#agent-status").classList.contains("on"), { timeout: 3000 });
+
+    const sent = bodies[0] || {};
+    const imgs = sent.images || [];
+    check("images: sent with the message, even with no text", imgs.length === 2 && typeof sent.prompt === "string" && sent.prompt.length > 0);
+    check("images: base64 data plus a media type, nothing else", imgs.every((i) => Object.keys(i).sort().join() === "data,mediaType" && /^[A-Za-z0-9+/]+=*$/.test(i.data)));
+    check("images: the PNG stays a PNG", imgs[0] && imgs[0].mediaType === "image/png");
+    const dims = await page.evaluate(async (d) => {
+      const img = new Image();
+      img.src = `data:image/jpeg;base64,${d}`;
+      await img.decode();
+      return [img.naturalWidth, img.naturalHeight];
+    }, imgs[1] ? imgs[1].data : "");
+    check("images: a 3200px image is scaled to 1568px on its long edge", dims[0] === 1568 && dims[1] === 882);
+    check("images: composer is empty again after sending", await page.$$eval("#ctx-bar .ctx-pill.image", (p) => p.length === 0));
+    check("images: thumbnails shown in the sent message", await page.$$eval("#chat .msg.user .msg-images img", (i) => i.length === 2));
+    check("images: plain text still pastes as text", true); // the text paste above added no thumbnail
+
+    // the saved chat keeps a count, never the data
+    await sleep(300);
+    const saved = fs.readFileSync(path.join(dir, ".fethr", "chat.json"), "utf8");
+    const entry = JSON.parse(saved).entries.find((e) => e.type === "user");
+    check("images: saved chat records the count", entry && entry.images === 2);
+    check("images: saved chat holds no image data", !saved.includes(imgs[0] ? imgs[0].data.slice(0, 40) : "@@") && saved.length < 4000);
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForSelector("#chat .msg.user");
+    check("images: a restored chat shows [2 images]", await page.$eval("#chat .msg.user .msg-images-note", (n) => n.textContent === "[2 images]"));
+
+    // wrong type is refused with a note
+    await page.evaluate(() => {
+      const dt = new DataTransfer();
+      dt.items.add(new File(["<svg/>"], "x.svg", { type: "image/svg+xml" }));
+      document.querySelector("#composer").dispatchEvent(new DragEvent("drop", { dataTransfer: dt, bubbles: true, cancelable: true }));
+    });
+    await sleep(300);
+    check("images: SVG is refused, with a reason", await page.$eval("#status", (s) => s.textContent.includes("isn't a PNG")) &&
+      await page.$$eval("#ctx-bar .ctx-pill.image", (p) => p.length === 0));
+    await page.close();
+  }
+
   await browser.close();
   fs.rmSync(tmp, { recursive: true, force: true });
   process.exit(failures ? 1 : 0);

@@ -469,6 +469,124 @@ function renderCtxBar() {
     pill.appendChild(x);
     bar.appendChild(pill);
   }
+  pendingImages.forEach((im, i) => {
+    const pill = document.createElement("span");
+    pill.className = "ctx-pill image";
+    pill.title = `${im.name} — sent with your next message`;
+    const img = document.createElement("img");
+    img.src = im.url; // a data: URL; the CSP allows img-src data:
+    img.alt = im.name;
+    pill.appendChild(img);
+    const x = document.createElement("button");
+    x.textContent = "×";
+    x.title = "Remove";
+    x.onclick = () => {
+      pendingImages.splice(i, 1);
+      renderCtxBar();
+    };
+    pill.appendChild(x);
+    bar.appendChild(pill);
+  });
+}
+
+// ---------- images: paste or drop into the composer ----------
+// Sent with the next message as image blocks (src/agent.js promptInput).
+// Large images are scaled down here first: past ~1568px on the long edge the
+// model downsamples anyway, and a smaller payload keeps under the API's 5 MB
+// per-image limit. Saved chats keep only a count, never the image data.
+
+const IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+const MAX_IMAGES = 6;
+const MAX_IMAGE_EDGE = 1568;
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+let pendingImages = []; // { mediaType, data (base64), url (data: URL), name }
+
+const readAsDataURL = (blob) =>
+  new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(blob);
+  });
+
+async function prepareImage(file) {
+  if (!IMAGE_TYPES.includes(file.type)) throw new Error(`${file.name || "that file"} isn't a PNG, JPEG, GIF or WebP image`);
+  let url = await readAsDataURL(file);
+  let mediaType = file.type;
+  const bmp = await createImageBitmap(file);
+  const scale = Math.min(1, MAX_IMAGE_EDGE / Math.max(bmp.width, bmp.height));
+  // Re-encode only when it helps: a GIF that is already small keeps its frames.
+  if (scale < 1 || file.size > MAX_IMAGE_BYTES * 0.7) {
+    const c = document.createElement("canvas");
+    c.width = Math.max(1, Math.round(bmp.width * scale));
+    c.height = Math.max(1, Math.round(bmp.height * scale));
+    c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+    mediaType = file.type === "image/png" ? "image/png" : "image/jpeg";
+    url = c.toDataURL(mediaType, 0.9);
+    if (mediaType === "image/png" && url.length * 0.75 > MAX_IMAGE_BYTES) {
+      mediaType = "image/jpeg"; // a big screenshot as PNG can still be too large
+      url = c.toDataURL(mediaType, 0.9);
+    }
+  }
+  bmp.close();
+  const data = url.slice(url.indexOf(",") + 1);
+  if (data.length * 0.75 > MAX_IMAGE_BYTES) throw new Error(`${file.name || "image"} is still over 5 MB after scaling down`);
+  return { mediaType, data, url: `data:${mediaType};base64,${data}`, name: file.name || "pasted image" };
+}
+
+async function addImages(files) {
+  for (const file of files) {
+    if (pendingImages.length >= MAX_IMAGES) {
+      setStatus(`at most ${MAX_IMAGES} images per message`);
+      break;
+    }
+    try {
+      pendingImages.push(await prepareImage(file));
+    } catch (e) {
+      setStatus(String(e.message || e));
+    }
+  }
+  renderCtxBar();
+}
+
+const imageFiles = (list) => [...(list || [])].filter((f) => f.type && f.type.startsWith("image/"));
+
+inputEl.addEventListener("paste", (e) => {
+  const files = imageFiles([...(e.clipboardData?.items || [])].filter((it) => it.kind === "file").map((it) => it.getAsFile()).filter(Boolean));
+  if (!files.length) return; // plain text pastes as usual
+  e.preventDefault();
+  addImages(files);
+});
+
+const composerEl = $("#composer");
+composerEl.addEventListener("dragover", (e) => {
+  if (![...(e.dataTransfer?.types || [])].includes("Files")) return;
+  e.preventDefault();
+  composerEl.classList.add("drop-target");
+});
+composerEl.addEventListener("dragleave", (e) => {
+  if (!composerEl.contains(e.relatedTarget)) composerEl.classList.remove("drop-target");
+});
+composerEl.addEventListener("drop", (e) => {
+  composerEl.classList.remove("drop-target");
+  const files = imageFiles(e.dataTransfer?.files);
+  if (!files.length) return;
+  e.preventDefault();
+  addImages(files);
+});
+
+// The thumbnails a sent message showed, kept only for this page's life.
+function addImageThumbs(msgEl, imgs) {
+  const row = document.createElement("div");
+  row.className = "msg-images";
+  for (const im of imgs) {
+    const img = document.createElement("img");
+    img.src = im.url;
+    img.alt = im.name;
+    img.title = im.name;
+    row.appendChild(img);
+  }
+  msgEl.appendChild(row);
 }
 
 // ---------- @-mention: attach any workspace file as context ----------
@@ -872,7 +990,14 @@ function persistChat() {
 function renderEntry(entry, live = false) {
   if (entry.type === "user") {
     const el = addMsg("user", "you", entry.text);
-    addTurn(el, entry.text);
+    if (entry.images && !live) {
+      // Saved chats keep the count, not the image data.
+      const n = document.createElement("div");
+      n.className = "msg-images-note";
+      n.textContent = entry.images === 1 ? "[1 image]" : `[${entry.images} images]`;
+      el.appendChild(n);
+    }
+    addTurn(el, entry.text || (entry.images ? "[image]" : ""));
     return el;
   }
   if (entry.type === "assistant") {
@@ -1109,7 +1234,7 @@ function reportRecentSession(id) {
   }).catch(() => {});
 }
 
-async function askAgent(prompt) {
+async function askAgent(prompt, images = []) {
   streaming = true;
   abortCtl = new AbortController();
   const selectedModel = $("#model").value || undefined;
@@ -1118,7 +1243,8 @@ async function askAgent(prompt) {
   let doneDetail = null;
   let replyNote = false; // the bubble got a plain-text error instead of a reply
   const runMode = agentMode; // a switch mid-run applies from the next message
-  recordAndAdd({ type: "user", text: prompt });
+  const userEl = recordAndAdd({ type: "user", text: prompt, ...(images.length ? { images: images.length } : {}) });
+  if (images.length) addImageThumbs(userEl, images);
   scrollChatToEnd(); // your own message always brings you to the bottom
   const reply = addMsg("assistant", "agent", "");
   let replyRaw = "";
@@ -1157,6 +1283,7 @@ async function askAgent(prompt) {
         gitBranch,
         model: selectedModel,
         mode: runMode,
+        ...(images.length ? { images: images.map(({ mediaType, data }) => ({ mediaType, data })) } : {}),
         ...(resumeMode ? { resumed: { source: resumedSource } } : {}),
       }),
     });
@@ -1392,10 +1519,16 @@ inputEl.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
     const t = inputEl.value.trim();
-    if (!t || streaming) return;
+    if ((!t && !pendingImages.length) || streaming) return;
+    if (t && SLASH_RE.test(t) && !pendingImages.length) {
+      inputEl.value = "";
+      return slashCommand(t);
+    }
     inputEl.value = "";
-    if (SLASH_RE.test(t)) return slashCommand(t);
-    askAgent(t);
+    const imgs = pendingImages;
+    pendingImages = [];
+    renderCtxBar();
+    askAgent(t || "(see the attached image)", imgs);
   }
 });
 

@@ -35,6 +35,10 @@
       Claude Code's `auto` permission mode with no prompts; read-only stays the default. See
       ARCHITECTURE "Safety model". Denials are detected by matching error text, so an ordinary
       failure that says "permission" also shows as "blocked".
+- [ ] **Read-only can't propose edits outside its folder.** A session resumed in folder A that is
+      about files in folder B can only describe the change: `propose_edit` and `/api/file` refuse
+      paths outside the root. Found 2026-10-17 resuming a session recorded in one repo about
+      another. Options: say so in `<fethr_context>`, or offer "open folder B" from the refusal.
 - [ ] **Not yet run against a real agent:** full mode, Attach / Move here, and the native folder
       picker have been tested only with stubs. Run each once in the app before release.
 

@@ -22,6 +22,11 @@ auto mode: tools run without asking, a classifier can block risky actions, and y
 settings and hooks apply. Files the agent changes reload in the editor. The old "auto" checkbox
 is now "auto-apply". Opening a session whose folder is your home folder asks first.
 
+**Images in the agent panel.** Paste or drop PNG, JPEG, GIF or WebP images into the composer.
+They show as thumbnails you can remove, go with your next message as image blocks, and appear
+in the sent message. Images larger than 1568px on the long edge are scaled down first; up to six
+per message, 5 MB each. Saved chats keep only "[2 images]", never the image data.
+
 **Fixes.** Preferences (theme, widths, auto-save) now survive a relaunch: they were kept per
 origin, and the random port made every launch a new one. Read-only mode now also blocks
 subagents under their current tool name. Replies render headings, lists and quotes.

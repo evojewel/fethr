@@ -5,7 +5,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { runAgent, fethrContext, ALLOWED_TOOLS, DISALLOWED_TOOLS, MODE_OPTIONS, editorSync } from "../src/agent.js";
+import { runAgent, fethrContext, ALLOWED_TOOLS, DISALLOWED_TOOLS, MODE_OPTIONS, editorSync, checkImages, handleAgent, MAX_IMAGES } from "../src/agent.js";
+import { EventEmitter } from "node:events";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "fethr-agent-"));
 
@@ -228,4 +229,50 @@ test("readonly sends no change events; a refusal is reported in both modes", asy
       { type: "tool-denied", name: "Edit", detail: "Blocked: edits to this file are not allowed" },
     ], mode + ": a refused command never ran, so no maybe-changed either");
   }
+});
+
+test("images: validated, then sent as image blocks before the text", async () => {
+  const png = Buffer.from("fake png bytes").toString("base64");
+  assert.deepEqual(checkImages(undefined), { images: [] });
+  assert.match(checkImages("x").error, /list/);
+  assert.match(checkImages([{ mediaType: "image/svg+xml", data: png }]).error, /PNG, JPEG, GIF or WebP/);
+  assert.match(checkImages([{ mediaType: "image/png", data: "not base64!" }]).error, /base64/);
+  assert.match(checkImages(Array.from({ length: MAX_IMAGES + 1 }, () => ({ mediaType: "image/png", data: png }))).error, /at most/);
+  assert.match(checkImages([{ mediaType: "image/png", data: "A".repeat(7 * 1024 * 1024) }]).error, /over 5 MB/);
+  assert.deepEqual(checkImages([{ mediaType: "image/png", data: png, extra: "dropped" }]).images, [{ mediaType: "image/png", data: png }]);
+
+  // Without images the prompt stays a plain string, exactly as before.
+  const plain = fakeQuery([{ type: "result", subtype: "success", result: "ok" }]);
+  await runAgent(os.tmpdir(), { prompt: "hi" }, fakeRes(), { queryFn: plain.queryFn });
+  assert.equal(typeof plain.calls[0].prompt, "string");
+
+  // With images: one structured user message, images first, then the full text.
+  const withImg = fakeQuery([{ type: "result", subtype: "success", result: "ok" }]);
+  await runAgent(os.tmpdir(), { prompt: "what is this?", images: [{ mediaType: "image/png", data: png }] }, fakeRes(), { queryFn: withImg.queryFn });
+  const msgs = [];
+  for await (const m of withImg.calls[0].prompt) msgs.push(m);
+  assert.equal(msgs.length, 1);
+  assert.equal(msgs[0].type, "user");
+  assert.equal(msgs[0].parent_tool_use_id, null);
+  const content = msgs[0].message.content;
+  assert.deepEqual(content[0], { type: "image", source: { type: "base64", media_type: "image/png", data: png } });
+  assert.equal(content[1].type, "text");
+  assert.match(content[1].text, /^what is this\?/);
+  assert.match(content[1].text, /<fethr_context>/, "the context block still rides with the text");
+});
+
+test("images: a bad image is a 400 before Claude Code starts", async () => {
+  const calls = [];
+  const send = (body) => new Promise((resolve) => {
+    const req = new EventEmitter();
+    req.setEncoding = () => {};
+    const res = { status: 0, body: "", writeHead(s) { this.status = s; }, end(b) { this.body = b; resolve(this); }, write() {}, on() {} };
+    handleAgent(os.tmpdir(), req, res, { queryFn: (a) => { calls.push(a); return { async *[Symbol.asyncIterator]() {} }; } });
+    req.emit("data", JSON.stringify(body));
+    req.emit("end");
+  });
+  const r = await send({ prompt: "x", images: [{ mediaType: "text/html", data: "QQ==" }] });
+  assert.equal(r.status, 400);
+  assert.match(JSON.parse(r.body).error, /PNG/);
+  assert.equal(calls.length, 0);
 });

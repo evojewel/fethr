@@ -23,6 +23,21 @@
 - [ ] **`.fethr/chat.json` leaks into repos** that have no ignore rule. Write a `.fethr/.gitignore`
       containing `*` on first save.
 
+- [ ] **Home screen: known gaps** *(2026-10-17, see `docs/plans/home-screen.md`)*. Two windows on the
+      same folder share `.fethr/chat.json`, and the last write wins. Resume of a `live` session is
+      allowed, only discouraged. The home view doesn't show the update notice. The real macOS folder
+      picker (`osascript` in CLI mode, the dialog plugin in the app) has only been tested through mocks.
+- [ ] **A local `tauri build` ships a stale sidecar.** ARCHITECTURE says `stage-sidecar.sh` runs in
+      `beforeBuildCommand`, but `tauri.conf.json` runs only `npm run build`; only the CI workflows run
+      the staging step. On 2026-10-17 a local build bundled the 2026-10-02 server. Either chain it into
+      `beforeBuildCommand` or correct the doc.
+- [x] **Full-capability mode** *(decided and built 2026-10-17)*. A per-window "full" mode runs
+      Claude Code's `auto` permission mode with no prompts; read-only stays the default. See
+      ARCHITECTURE "Safety model". Denials are detected by matching error text, so an ordinary
+      failure that says "permission" also shows as "blocked".
+- [ ] **Not yet run against a real agent:** full mode, Attach / Move here, and the native folder
+      picker have been tested only with stubs. Run each once in the app before release.
+
 ## Next
 
 - [x] **Windows installer** *(2026-10-02, unreleased)* — `build-windows.yml` builds the NSIS

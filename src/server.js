@@ -1,15 +1,36 @@
 // fethr local server — serves the editor UI and a minimal file API.
 // Binds to 127.0.0.1 only. All file access is confined to the root the
 // user launched with; paths that escape it are rejected.
+//
+// Two modes. Editor: a folder is open (root). Home: no folder (root is null),
+// the page lists recent folders and Claude Code sessions, and every file API
+// answers 400. Opening something from home never changes this server's root:
+// it asks for a new window with its own server (see /api/open).
 
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
-import { execFile, execFileSync } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import crypto from "node:crypto";
+import {
+  listSessions, getSession, sessionHistory, isSessionId, recentFolders, upsertRecent, openSessions,
+  attachInTerminal, stopBackgroundSession, listSubagents, AGENT_ID_RE, latestContinuation, setRecentHidden,
+} from "./sessions.js";
+import { readPrefs, mergePrefs, MAX_PREFS_BODY } from "./prefs.js";
 
-const DIST = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "dist");
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const DIST = path.join(HERE, "..", "dist");
+const BIN = path.join(HERE, "..", "bin", "fethr.js");
+const MAX_OPEN_BODY = 64 * 1024;
+// Endpoints that only make sense with a folder open.
+const NEEDS_ROOT = new Set(["/api/file", "/api/tree", "/api/chat", "/api/agent", "/api/recent"]);
+// /api/recent is called as soon as the agent reports its session id; Claude
+// Code may not have created the transcript yet, so wait this long for it.
+// FETHR_RECENT_WAIT_MS exists for the tests.
+const RECENT_WAIT_MS = () => Number(process.env.FETHR_RECENT_WAIT_MS) || 5_000;
+const RECENT_POLL_MS = 250;
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", "target", "__pycache__", "env", "venv"]);
 // "target": opening fethr on its own repo put ~15k Rust build files from
@@ -119,9 +140,176 @@ function send(res, code, body, type = "application/json", extra = {}) {
   res.end(body);
 }
 
+const sendJson = (res, code, obj) => send(res, code, JSON.stringify(obj));
+
+const realOr = (p) => { try { return fs.realpathSync(p); } catch { return p; } };
+
+// An internal result is either an answer for the page or { status, error }.
+function reply(res, out) {
+  if (out.status) return sendJson(res, out.status, { error: out.error });
+  sendJson(res, 200, out);
+}
+
+const SESSION_ACTIONS = new Set(["attach", "stop-and-resume"]);
+
+// The agent can Read/Grep/Glob anything under its root. The native shell
+// refuses to fall back to $HOME for exactly that reason (src-tauri/src/lib.rs),
+// but a session recorded in the home folder would hand the agent the whole of
+// it — SSH key folders, every other project — through a single click. So the
+// home folder, its parent and the filesystem root need an explicit second yes
+// from the page. A folder the user picks in the native dialog or passes on the
+// command line is already that explicit choice and doesn't come through here.
+function isBroadFolder(dir) {
+  const real = (p) => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
+  const d = real(dir);
+  const home = real(os.homedir());
+  return d === home || d === path.dirname(home) || d === path.parse(d).root;
+}
+
+// Turn an /api/open request into a target, deciding everything that matters
+// here rather than trusting the page: a session opens in the folder its
+// transcript was recorded in (the SDK resumes with cwd = root, and Claude Code
+// files sessions by folder), so the page sends only the id. Resolves to
+// { target } or { status, error, ... }.
+async function resolveOpen(body) {
+  const out = await resolveTarget(body);
+  if (out.target && out.target.root && body.confirmBroad !== true && isBroadFolder(out.target.root)) {
+    return {
+      status: 428,
+      error: `this opens ${out.target.root}, so the agent could read everything in it`,
+      broad: true,
+      folder: out.target.root,
+    };
+  }
+  return out;
+}
+
+async function resolveTarget(body) {
+  if (!body || typeof body !== "object") return { status: 400, error: "bad request" };
+  if (body.session !== undefined) {
+    if (!isSessionId(body.session)) return { status: 400, error: "bad session id" };
+    const asked = getSession(body.session);
+    if (!asked) return { status: 404, error: "unknown session" };
+    // Resuming a session Claude Code has since continued under a new id
+    // resumes the new one (it holds the conversation from then on). The
+    // checks below then apply to that successor. A fork of the old one is
+    // left as asked: it branches from exactly that transcript.
+    const s = body.fork === true ? asked : getSession(latestContinuation(asked.id)) || asked;
+    if (!s.cwd || !s.cwdExists) return { status: 409, error: "the session's folder no longer exists", cwd: s.cwd };
+    const fork = body.fork === true;
+    if (!fork) {
+      // Resuming a session Claude Code is running in the background fails
+      // inside the agent, after a window has opened. Ask now, with a fresh
+      // list: the home page's copy can be seconds old. Unknown (no claude,
+      // an older one) lets the resume through, as before this check.
+      const open = await openSessions({ fresh: true });
+      const o = open && open.get(s.id);
+      if (o && o.kind === "background") {
+        return { status: 409, error: "running in the background", hint: `claude attach ${s.id.slice(0, 8)}` };
+      }
+    }
+    return { target: { root: s.cwd, session: s.id, fork } };
+  }
+  if (body.root !== undefined) {
+    if (typeof body.root !== "string" || !path.isAbsolute(body.root)) return { status: 400, error: "root must be an absolute path" };
+    const root = path.resolve(body.root);
+    let st;
+    try { st = fs.statSync(root); } catch { /* handled below */ }
+    if (!st || !st.isDirectory()) return { status: 400, error: "not an existing folder" };
+    return { target: { root } };
+  }
+  if (body.pick === true) return { target: { pick: true } };
+  if (body.home === true) return { target: { home: true } };
+  return { status: 400, error: "nothing to open" };
+}
+
+// The fethr arguments that open a target, as a person would type them.
+export function argsFor(target, app = false) {
+  const args = target.home
+    ? ["--home"]
+    : [target.root, ...(target.session ? ["--session", target.session] : []), ...(target.fork ? ["--fork"] : [])];
+  return app ? [...args, "--app"] : args;
+}
+
+// CLI mode's way to open a target: a new, detached fethr process, which binds
+// its own port, mints its own token and opens its own tab, exactly as if the
+// user had typed the command. Detached and unref'd so closing this tab (and
+// the reaper ending this server) does not take the new one with it.
+// windowsHide: without it Windows flashes a console window for the child.
+function launchSelf(args, spawnFn) {
+  const child = spawnFn(process.execPath, [BIN, ...args], {
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  child.on("error", () => {}); // reported to nobody; the page already got its answer
+  child.unref();
+}
+
+// macOS has a folder picker reachable without a GUI toolkit; nothing
+// comparable ships with every Linux or Windows install, so there the page
+// falls back to a path box (501). Exit code 1 with -128 is the user pressing
+// Cancel, which is an answer, not an error.
+function pickFolder() {
+  return new Promise((resolve) => {
+    if (process.platform !== "darwin") return resolve({ status: 501, error: "no folder picker on this platform" });
+    execFile("osascript", ["-e", "POSIX path of (choose folder)"], (err, stdout, stderr) => {
+      if (err) {
+        return resolve(/-128/.test(String(stderr)) ? { cancelled: true } : { status: 500, error: "folder picker failed" });
+      }
+      const picked = stdout.trim();
+      // "POSIX path of" ends a folder with "/"; keep "/" itself intact.
+      resolve({ root: picked.length > 1 ? picked.replace(/\/+$/, "") : picked });
+    });
+  });
+}
+
+// spawnFn and pick are parameters so the tests can see what would be
+// launched without launching it.
+export function defaultOnOpen(app, { spawnFn = spawn, pick = pickFolder } = {}) {
+  return async (target) => {
+    if (target.pick) {
+      const r = await pick();
+      if (!r.root) return r;
+      launchSelf(argsFor({ root: r.root }, app), spawnFn);
+      return { ok: true };
+    }
+    launchSelf(argsFor(target, app), spawnFn);
+    return { ok: true };
+  };
+}
+
+// A body over the limit resolves to TOO_LARGE once the rest has been read
+// and dropped, so the handler can still answer (413) instead of the socket
+// being cut. Anything that is not JSON resolves to undefined.
+const TOO_LARGE = Symbol("too large");
+function readJsonBody(req, max) {
+  return new Promise((resolve) => {
+    let body = "";
+    let over = false;
+    req.setEncoding("utf8");
+    req.on("data", (c) => {
+      if (over) return;
+      body += c;
+      if (body.length > max) { over = true; body = ""; }
+    });
+    req.on("end", () => {
+      if (over) return resolve(TOO_LARGE);
+      try { resolve(JSON.parse(body)); } catch { resolve(undefined); }
+    });
+  });
+}
+
 export function serve(root, onReady, opts = {}) {
-  root = path.resolve(root);
+  const home = !!opts.home;
+  root = home ? null : path.resolve(root);
+  if (opts.session && !isSessionId(opts.session.id)) throw new Error("bad session id");
+  const onOpen = opts.onOpen || defaultOnOpen(!!opts.app);
   let lastPing = null;
+  // A resume is remembered with its session, so the home list can name the
+  // chat. A fork's new id is not known until the agent starts; the page
+  // reports it through /api/recent.
+  if (root) upsertRecent(root, opts.session && !opts.session.fork ? { session: opts.session.id } : {});
 
   // CLI mode: exit when the editor tab has been gone for a while (only once
   // it has pinged at least once, so headless/API use is unaffected).
@@ -171,6 +359,7 @@ export function serve(root, onReady, opts = {}) {
       if (!tokenMatches(req.headers[TOKEN_HEADER])) {
         return send(res, 401, JSON.stringify({ error: "missing or wrong token" }));
       }
+      if (!root && NEEDS_ROOT.has(u.pathname)) return sendJson(res, 400, { error: "no folder open" });
     }
 
     if (req.method === "GET" && (u.pathname === "/" || u.pathname === "/index.html")) {
@@ -183,10 +372,148 @@ export function serve(root, onReady, opts = {}) {
       // channel: which release train this instance came from, so the update
       // check compares against the right number — the DMG and the npm tag
       // do not move together.
-      return send(res, 200, JSON.stringify({
-        root, name: path.basename(root), gitBranch: getGitBranch(root),
-        version: VERSION, channel: opts.sidecar ? "app" : "npm",
-      }));
+      const channel = opts.sidecar ? "app" : "npm";
+      if (!root) return sendJson(res, 200, { mode: "home", version: VERSION, channel });
+      const meta = {
+        mode: "editor", root, name: path.basename(root), gitBranch: getGitBranch(root),
+        version: VERSION, channel,
+      };
+      if (opts.session) {
+        const s = getSession(opts.session.id);
+        meta.resume = { id: opts.session.id, fork: !!opts.session.fork, title: s ? s.title : null, source: s ? s.source : null };
+      }
+      return sendJson(res, 200, meta);
+    }
+    if (req.method === "GET" && u.pathname === "/api/home") {
+      // openSessions never rejects; null (unknown) leaves every open: null.
+      openSessions().then((open) => {
+        sendJson(res, 200, {
+          recentFolders: recentFolders({ open }),
+          recentHidden: recentFolders({ open, hidden: true }),
+          sessions: listSessions({ open }),
+        });
+      });
+      return;
+    }
+    if (u.pathname === "/api/prefs") {
+      // Preferences that outlive the launch (see prefs.js). Both modes.
+      if (req.method === "GET") return sendJson(res, 200, readPrefs());
+      if (req.method === "PUT") {
+        readJsonBody(req, MAX_PREFS_BODY).then((body) => {
+          if (body === TOO_LARGE) return sendJson(res, 413, { error: "prefs body too large" });
+          const r = mergePrefs(body);
+          if (r.status) return sendJson(res, r.status, { error: r.error });
+          sendJson(res, 200, r.prefs);
+        });
+        return;
+      }
+    }
+    if (req.method === "POST" && (u.pathname === "/api/recent/hide" || u.pathname === "/api/recent/unhide")) {
+      // Take an entry off the Recent list, or put it back. Only fethr's own
+      // list changes; no folder or session is touched. Both modes.
+      readJsonBody(req, MAX_OPEN_BODY).then((body) => {
+        if (!body || typeof body !== "object" || typeof body.path !== "string" || !body.path) {
+          return sendJson(res, 400, { error: "bad request" });
+        }
+        const session = body.session ?? null;
+        if (session !== null && !isSessionId(session)) return sendJson(res, 400, { error: "bad session id" });
+        reply(res, setRecentHidden(body.path, session, u.pathname.endsWith("/hide")));
+      });
+      return;
+    }
+    if (req.method === "POST" && u.pathname === "/api/recent") {
+      // The page reports the agent's session id once it is known (a fork, or
+      // a plain folder's first chat), so this folder's recent entry can carry
+      // the chat's name. Only a session recorded in this very folder.
+      readJsonBody(req, MAX_OPEN_BODY).then(async (body) => {
+        const id = body && body.session;
+        if (!isSessionId(id)) return sendJson(res, 400, { error: "bad session id" });
+        let s = getSession(id);
+        for (const until = Date.now() + RECENT_WAIT_MS(); !s && Date.now() < until;) {
+          await new Promise((r) => setTimeout(r, RECENT_POLL_MS));
+          s = getSession(id);
+        }
+        if (!s) return sendJson(res, 404, { error: "unknown session" });
+        if (!s.cwd || realOr(s.cwd) !== realOr(root)) return sendJson(res, 409, { error: "that session belongs to another folder" });
+        upsertRecent(root, { session: id, dropPlain: true });
+        sendJson(res, 200, { ok: true });
+      }).catch((e) => sendJson(res, 500, { error: String(e.message || e) }));
+      return;
+    }
+    if (req.method === "GET" && u.pathname === "/api/subagents") {
+      const id = u.searchParams.get("id");
+      if (!isSessionId(id)) return sendJson(res, 400, { error: "bad session id" });
+      openSessions().then((open) => {
+        try {
+          const list = listSubagents(id, { open });
+          return list ? sendJson(res, 200, list) : sendJson(res, 404, { error: "unknown session" });
+        } catch {
+          return sendJson(res, 500, { error: "could not read subagents" });
+        }
+      });
+      return;
+    }
+    if (req.method === "GET" && u.pathname === "/api/session-history") {
+      const id = u.searchParams.get("id");
+      if (!isSessionId(id)) return sendJson(res, 400, { error: "bad session id" });
+      // Optional: one of its subagents' transcripts instead.
+      const agentId = u.searchParams.get("agent");
+      if (agentId !== null && !AGENT_ID_RE.test(agentId)) return sendJson(res, 400, { error: "bad agent id" });
+      try {
+        const h = sessionHistory(id, { agentId });
+        return h ? sendJson(res, 200, h) : sendJson(res, 404, { error: "unknown session" });
+      } catch (e) {
+        return sendJson(res, e.status || 500, { error: e.status ? e.message : "could not read session" });
+      }
+    }
+    // Resolve, then hand the target to onOpen; shared by /api/open and the
+    // stop-and-resume action, so both open a session the same way.
+    const openResolved = async (body) => {
+      const r = await resolveOpen(body);
+      if (!r.target) {
+        const { status, ...rest } = r;
+        return sendJson(res, status, rest);
+      }
+      let out;
+      try {
+        out = (await onOpen(r.target)) || { ok: true };
+      } catch (e) {
+        out = { status: 500, error: String(e.message || e) };
+      }
+      reply(res, out);
+    };
+    if (req.method === "POST" && u.pathname === "/api/open") {
+      readJsonBody(req, MAX_OPEN_BODY)
+        .then(openResolved)
+        .catch((e) => sendJson(res, 500, { error: String(e.message || e) }));
+      return;
+    }
+    if (req.method === "POST" && u.pathname === "/api/session-action") {
+      // The other two answers to "running in the background" (Fork is the
+      // third, via /api/open). Only for a session that a fresh
+      // `claude agents` says is running in the background right now.
+      readJsonBody(req, MAX_OPEN_BODY).then(async (body) => {
+        const id = body && body.id;
+        if (!isSessionId(id) || !SESSION_ACTIONS.has(body.action)) return sendJson(res, 400, { error: "bad request" });
+        const open = await openSessions({ fresh: true });
+        const o = open && open.get(id);
+        if (!o || o.kind !== "background") return sendJson(res, 409, { error: "not running in the background" });
+        if (body.action === "attach") return reply(res, await attachInTerminal(id));
+        // Ask about a home-sized folder before stopping anything: a 428 after
+        // the stop would leave the session stopped and not reopened.
+        const s = getSession(id);
+        if (s && s.cwd && body.confirmBroad !== true && isBroadFolder(s.cwd)) {
+          return sendJson(res, 428, {
+            error: `this opens ${s.cwd}, so the agent could read everything in it`,
+            broad: true,
+            folder: s.cwd,
+          });
+        }
+        const stopped = await stopBackgroundSession(id);
+        if (stopped.status) return reply(res, stopped);
+        await openResolved({ session: id, confirmBroad: body.confirmBroad === true });
+      }).catch((e) => sendJson(res, 500, { error: String(e.message || e) }));
+      return;
     }
     if (u.pathname === "/api/chat") {
       // Conversation history lives with the project, not the browser — a
@@ -273,7 +600,7 @@ export function serve(root, onReady, opts = {}) {
     const urlStr = `http://127.0.0.1:${server.address().port}/#t=${TOKEN}`;
     if (onReady) onReady(urlStr);
     else {
-      console.log(`\n  fethr — editing ${root}\n  ${urlStr}\n`);
+      console.log(root ? `\n  fethr — editing ${root}\n  ${urlStr}\n` : `\n  fethr — home\n  ${urlStr}\n`);
       if (process.env.FETHR_NO_OPEN) return; // print the URL, open nothing (tests, remote shells)
       if (opts.app && process.platform === "darwin") {
         // Chromeless app-mode window via Chrome/Edge when available. Explicit

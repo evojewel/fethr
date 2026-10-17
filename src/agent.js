@@ -14,68 +14,220 @@
 // harness, not a thin API client. fethr's entire premise is that the user
 // already has Claude Code installed (that's what supplies the login), so
 // the sidecar staging script installs with --omit=optional to skip that
-// bundled copy entirely, and findClaudeExecutable() below points the SDK
+// bundled copy entirely, and findClaudeExecutable() (claude-path.js) points the SDK
 // at the system install instead via pathToClaudeCodeExecutable. Verified:
 // removing the bundled binary and using this option works identically to
 // the SDK's built-in copy — same query(), same tools, same everything.
+// (The search itself lives in claude-path.js: the session list runs
+// `claude agents` with the same binary and must not load the SDK to find it.)
 
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { query, tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
+import { findClaudeExecutable } from "./claude-path.js";
 
-let cachedClaudePath; // computed once per process, not once per request
-function findClaudeExecutable() {
-  if (cachedClaudePath !== undefined) return cachedClaudePath;
-  const home = os.homedir();
-  const win = process.platform === "win32";
-  // PATH first on Windows (a GUI app inherits the real one there), last on
-  // macOS (where a GUI app gets launchd's bare PATH and the fixed homes are
-  // the reliable answer).
-  const onPath = (process.env.PATH || "")
-    .split(path.delimiter)
-    .filter(Boolean)
-    .map((d) => path.join(d, win ? "claude.exe" : "claude"));
-  const candidates = win
-    ? [
-        ...onPath,
-        path.join(home, ".local", "bin", "claude.exe"),
-        path.join(home, ".claude", "local", "claude.exe"),
-        // An npm-global install is a .cmd shim around this file; the SDK runs a
-        // .js path with node, which a .cmd cannot be handed to it as.
-        path.join(process.env.APPDATA || "", "npm", "node_modules", "@anthropic-ai", "claude-code", "cli.js"),
-      ]
-    : [
-        "/opt/homebrew/bin/claude",
-        "/usr/local/bin/claude",
-        path.join(home, ".claude/local/claude"),
-        path.join(home, ".local/bin/claude"),
-        ...onPath,
-      ];
-  cachedClaudePath = candidates.find((c) => {
-    try {
-      return fs.statSync(c).isFile();
-    } catch {
-      return false;
-    }
-  });
-  return cachedClaudePath;
-}
-
-const RULES = `
+// Two modes, chosen per window by the user. readonly (the default, and
+// whatever an unknown value means) is fethr's original safety model: read,
+// and propose. full is an opt-in: Claude Code's own tools, run without
+// prompts under the "auto" permission mode, whose classifier approves or
+// denies each action. bypassPermissions is never used.
+const RULES_COMMON = `
 You are the agent panel inside fethr, a featherweight code editor.
 The user is editing a project; their prompt may include the current file and selection.
+Keep answers short and concrete; this is a side panel, not a chat site.
+The <fethr_context> tag in each prompt is authoritative about which tools you have and
+what mode you are in; earlier turns of a resumed conversation do not describe that.`;
+
+const RULES_READONLY = `
 You may read the workspace with Read/Grep/Glob.
 You can NEVER modify files directly. To change a file, call the propose_edit tool with
 the COMPLETE new content of that file — the writer reviews a diff and decides.
-One proposal per file per reply. Keep answers short and concrete; this is a side panel,
-not a chat site.
+One proposal per file per reply.
 If the prompt includes a <git_branch> tag, that is the real, checked branch — state it
 plainly. If it's absent, you do not know the branch (you have no Bash tool to check it
-yourself) — say you don't have that information rather than guessing one.`;
+yourself) — say you don't have that information rather than guessing one.
+When a tool you want is unavailable, say plainly that fethr's agent panel is read-only by
+design, and offer what does work: a read-only check with Read/Grep/Glob, a propose_edit,
+or "run this in your terminal: <command>". Never read settings files or configuration to
+work out why a tool is missing; the answer is always fethr's design.
+A resumed conversation may contain earlier turns from Claude Code with more tools (Bash,
+Edit, subagents). Those turns do not describe what you can do now.`;
 
-export function handleAgent(root, req, res) {
+const RULES_FULL = `
+You have Claude Code's tools, and they run without asking the user. Make real edits with
+Edit/Write; the user sees them in their editor as you make them. Use propose_edit only
+when the user asks for a proposal to review first.
+If the prompt includes a <git_branch> tag, that is the real, checked branch.
+An auto-mode classifier may block an action it judges risky. When that happens, say what
+was blocked and offer an alternative; do not try to work around the block.`;
+
+export function rulesFor(mode) {
+  return RULES_COMMON + (normalizeMode(mode) === "full" ? RULES_FULL : RULES_READONLY);
+}
+
+// The agent's tool set, in one place: these arrays go to the SDK as they are,
+// and fethrContext() below tells the model the same lists, so the two cannot
+// drift. Everything that writes, runs commands, reaches the network or
+// spawns subagents is out ("Task" and "Agent" are the subagent tool's old
+// and current names).
+export const PROPOSE_EDIT = "mcp__fethr__propose_edit";
+export const ALLOWED_TOOLS = ["Read", "Grep", "Glob", PROPOSE_EDIT];
+export const DISALLOWED_TOOLS = [
+  "Write", "Edit", "MultiEdit", "NotebookEdit", "Bash",
+  "WebFetch", "WebSearch", "Task", "Agent", "TodoWrite", "KillShell", "BashOutput",
+];
+
+export function normalizeMode(mode) {
+  return mode === "full" ? "full" : "readonly";
+}
+
+// The SDK options that differ by mode, in one place: runAgent spreads these
+// into query(), and fethrContext() and the tests read the same objects.
+// full sets no tool lists at all (the fethr MCP server, and so propose_edit,
+// is added for both modes), and never bypassPermissions.
+export const MODE_OPTIONS = {
+  readonly: { allowedTools: ALLOWED_TOOLS, disallowedTools: DISALLOWED_TOOLS },
+  full: { permissionMode: "auto" },
+};
+
+const displayName = (t) => t.replace(/^mcp__fethr__/, "");
+const disabledName = (t) => (t === "Task" || t === "Agent" ? `${t} (subagents)` : t);
+// Where a resumed session came from, as the home page labels it ("CLI",
+// "VS Code / Cursor", "SDK", or a raw entrypoint). It goes into the prompt,
+// so only a short, plain label is accepted.
+const SOURCE_RE = /^[A-Za-z0-9 ./()+_:-]{1,40}$/;
+
+// Per-request context about fethr itself, sent like <git_branch>: a resumed
+// session from Claude Code carries turns where Bash and Edit worked, and that
+// history outweighed the system prompt. Seen: a resumed agent, told "Bash is
+// disabled", spent turns reading settings files and then blamed the editor
+// it was started in. Stating the tool set in every prompt keeps it current.
+export function fethrContext(resumed, mode = "readonly") {
+  const full = normalizeMode(mode) === "full";
+  const ro = MODE_OPTIONS.readonly;
+  const lines = full
+    ? [
+        "You are in fethr's agent panel in full mode: Claude Code's tools are available and run without asking; " +
+          "an auto-mode classifier may block risky actions. The user sees your edits in their editor.",
+      ]
+    : [
+        "You are in fethr's agent panel.",
+        `Tools available: ${ro.allowedTools.map(displayName).join(", ")}.`,
+        `Disabled by fethr's design (not by any settings file, not by the user): ${ro.disallowedTools.map(disabledName).join(", ")}.`,
+        "Claude Code slash commands are not available here.",
+      ];
+  if (resumed && typeof resumed === "object") {
+    const from = typeof resumed.source === "string" && SOURCE_RE.test(resumed.source) ? ` (${resumed.source})` : "";
+    // In full mode the tools are all there, so the warning half would be false.
+    lines.push(full
+      ? `This conversation was started elsewhere${from} and resumed in fethr.`
+      : `This conversation was started elsewhere${from} and resumed in fethr; earlier turns may assume tools you no longer have.`);
+  }
+  return `<fethr_context>\n${lines.join("\n")}\n</fethr_context>`;
+}
+
+// ---------------------------------------------------------------- editor sync
+
+const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
+// Best effort: the SDK marks a refused tool call only as an is_error tool
+// result whose text explains it, so a denial (auto-mode classifier,
+// permission rules) is recognised by matching that text. A plain tool failure
+// that happens to mention one of these words is reported as a denial too.
+const DENIAL_RE = /permission|denied|blocked/i;
+const MAX_DENIAL_DETAIL = 300;
+
+function resultText(block) {
+  const c = block.content;
+  if (typeof c === "string") return c;
+  if (Array.isArray(c)) return c.filter((x) => x && typeof x.text === "string").map((x) => x.text).join("\n");
+  return "";
+}
+
+// How the editor learns what the agent changed, in full mode. Events go out
+// when a tool's result arrives, not when the call is made: at tool_use time
+// the file is not written yet, and a refused or failed call wrote nothing.
+//   file-changed: an edit tool succeeded; path is root-relative ("/"
+//     separators, as /api/file takes it), or absolute with outside: true.
+//   maybe-changed: a Bash command ran; what it touched is unknowable, so the
+//     page should re-check open files. Once per run.
+//   tool-denied: a call came back refused (both modes).
+export function editorSync(root, mode, emitFn) {
+  const full = normalizeMode(mode) === "full";
+  const pending = new Map(); // tool_use id -> { name, file }
+  let maybeSent = false;
+  let realRoot = root;
+  try { realRoot = fs.realpathSync(root); } catch { /* keep the lexical root */ }
+
+  const relative = (file) => {
+    const abs = path.resolve(root, file);
+    for (const base of [root, realRoot]) {
+      if (abs === base || abs.startsWith(base + path.sep)) {
+        return { path: path.relative(base, abs).split(path.sep).join("/") };
+      }
+    }
+    return { path: abs, outside: true };
+  };
+
+  return {
+    toolUse(b) {
+      if (!b || typeof b.id !== "string") return;
+      const i = b.input || {};
+      const file = typeof i.file_path === "string" ? i.file_path : typeof i.notebook_path === "string" ? i.notebook_path : null;
+      pending.set(b.id, { name: String(b.name || ""), file });
+    },
+    toolResult(b) {
+      const call = pending.get(b.tool_use_id);
+      if (!call) return;
+      pending.delete(b.tool_use_id);
+      if (b.is_error) {
+        const text = resultText(b);
+        if (DENIAL_RE.test(text)) {
+          const detail = text.trim().slice(0, MAX_DENIAL_DETAIL);
+          emitFn({ type: "tool-denied", name: call.name.replace(/^mcp__fethr__/, ""), detail });
+          return; // refused: it never ran
+        }
+        if (call.name !== "Bash") return; // a failed edit changed nothing
+      }
+      if (!full) return;
+      if (EDIT_TOOLS.has(call.name) && call.file) {
+        emitFn({ type: "file-changed", ...relative(call.file) });
+      } else if (call.name === "Bash" && !maybeSent) {
+        // Even a failing command may have written something before it failed.
+        maybeSent = true;
+        emitFn({ type: "maybe-changed" });
+      }
+    },
+  };
+}
+
+// The one place a run's final event is built. A run that produced no
+// assistant text (a slash command the SDK turns away, an immediate error)
+// would otherwise end as an empty reply in the panel, so it always carries a
+// short detail: the result text, the SDK's errors, the stderr tail, or the
+// subtype, whichever exists first.
+export function doneEvent(msg, { sawText, stderrTail = [] }) {
+  const ok = msg.subtype === "success";
+  const stderr = stderrTail.filter((l) => !/^\s*at /.test(l)).slice(-3).join(" · ");
+  const resultText = typeof msg.result === "string" ? msg.result.trim() : "";
+  const errors = Array.isArray(msg.errors) ? msg.errors.filter((e) => typeof e === "string").join(" · ") : "";
+  const short = (t) => (t.length > 300 ? t.slice(0, 299) + "…" : t);
+  if (ok && sawText) return { type: "done", ok: true };
+  if (ok) {
+    return { type: "done", ok: true, empty: true, detail: short(resultText || stderr || "no reply") };
+  }
+  return {
+    type: "done",
+    ok: false,
+    error: msg.subtype,
+    ...(sawText ? {} : { empty: true }),
+    detail: short(stderr || errors || resultText || String(msg.subtype || "error")),
+  };
+}
+
+// queryFn: the SDK's query(), replaceable so the tests can see exactly what
+// the SDK is given without starting Claude Code.
+export function handleAgent(root, req, res, { queryFn = query } = {}) {
   let body = "";
   req.setEncoding("utf8");
   req.on("data", (c) => {
@@ -90,7 +242,7 @@ export function handleAgent(root, req, res) {
       res.writeHead(400, { "content-type": "application/json" });
       return res.end(JSON.stringify({ error: "bad json" }));
     }
-    run(root, parsed, req, res).catch((e) => {
+    runAgent(root, parsed, res, { queryFn }).catch((e) => {
       try {
         emit(res, { type: "error", message: String(e.message || e) });
         res.end();
@@ -109,7 +261,8 @@ function emit(res, obj) {
 // on the first failure (see markFableUnavailable in web/editor.js).
 const MODEL_MAP = { opus: "opus", sonnet: "sonnet", haiku: "haiku", fable: "claude-fable-5" };
 
-async function run(root, { prompt, sessionId, context, extraFiles, gitBranch, model }, req, res) {
+export async function runAgent(root, { prompt, sessionId, fork, resumed, mode: askedMode, context, extraFiles, gitBranch, model }, res, { queryFn = query } = {}) {
+  const mode = normalizeMode(askedMode);
   res.writeHead(200, {
     "content-type": "text/event-stream",
     "cache-control": "no-store",
@@ -142,6 +295,7 @@ async function run(root, { prompt, sessionId, context, extraFiles, gitBranch, mo
   });
 
   let fullPrompt = prompt;
+  fullPrompt += `\n\n${fethrContext(resumed, mode)}`;
   if (gitBranch) fullPrompt += `\n\n<git_branch>${gitBranch}</git_branch>`;
   if (context && context.path) {
     fullPrompt += `\n\n<current_file path="${context.path}">\n${context.content ?? ""}\n</current_file>`;
@@ -156,7 +310,7 @@ async function run(root, { prompt, sessionId, context, extraFiles, gitBranch, mo
   // result message itself only says "error_during_execution". Keep the tail
   // and hand it to the panel when the run does not succeed.
   const stderrTail = [];
-  const q = query({
+  const q = queryFn({
     prompt: fullPrompt,
     options: {
       cwd: root,
@@ -166,15 +320,15 @@ async function run(root, { prompt, sessionId, context, extraFiles, gitBranch, mo
         }
         if (stderrTail.length > 20) stderrTail.splice(0, stderrTail.length - 20);
       },
-      systemPrompt: { type: "preset", preset: "claude_code", append: RULES },
+      systemPrompt: { type: "preset", preset: "claude_code", append: rulesFor(mode) },
       mcpServers: { fethr: fethrServer },
-      allowedTools: ["Read", "Grep", "Glob", "mcp__fethr__propose_edit"],
-      disallowedTools: [
-        "Write", "Edit", "MultiEdit", "NotebookEdit", "Bash",
-        "WebFetch", "WebSearch", "Task", "TodoWrite", "KillShell", "BashOutput",
-      ],
+      ...MODE_OPTIONS[mode],
       includePartialMessages: true,
       ...(sessionId ? { resume: sessionId } : {}),
+      // Fork: continue from that transcript under a new session id, leaving
+      // the original file untouched (home screen "Fork", docs/plans/home-screen.md).
+      // Meaningless without a session to fork from, so it needs both.
+      ...(fork && sessionId ? { forkSession: true } : {}),
       ...(model && MODEL_MAP[model] ? { model: MODEL_MAP[model] } : {}),
       ...(findClaudeExecutable() ? { pathToClaudeCodeExecutable: findClaudeExecutable() } : {}),
     },
@@ -190,13 +344,18 @@ async function run(root, { prompt, sessionId, context, extraFiles, gitBranch, mo
     if (!res.writableFinished && typeof q.interrupt === "function") q.interrupt().catch(() => {});
   });
 
+  let sawText = false;
+  const sync = editorSync(root, mode, (ev) => emit(res, ev));
   for await (const msg of q) {
     if (msg.type === "system" && msg.subtype === "init") {
       emit(res, { type: "session", id: msg.session_id });
     } else if (msg.type === "stream_event") {
       const ev = msg.event || {};
       const d = ev.delta;
-      if (d && d.type === "text_delta") emit(res, { type: "delta", text: d.text });
+      if (d && d.type === "text_delta") {
+        if (d.text) sawText = true;
+        emit(res, { type: "delta", text: d.text });
+      }
       else if (d && d.type === "thinking_delta" && d.thinking) {
         emit(res, { type: "thinking", text: d.thinking });
       } else if (ev.type === "content_block_start" && ev.content_block) {
@@ -206,22 +365,22 @@ async function run(root, { prompt, sessionId, context, extraFiles, gitBranch, mo
     } else if (msg.type === "assistant") {
       const blocks = (msg.message && msg.message.content) || msg.content || [];
       for (const b of blocks) {
+        if (b.type === "text" && typeof b.text === "string" && b.text.trim()) sawText = true;
         if (b.type === "tool_use") {
           const i = b.input || {};
           const detail =
             i.file_path || i.path || i.pattern || i.query ||
             (typeof i.command === "string" ? i.command.slice(0, 60) : "") || "";
           emit(res, { type: "tool", name: b.name.replace(/^mcp__fethr__/, ""), detail });
+          sync.toolUse(b);
         }
       }
+    } else if (msg.type === "user") {
+      // Tool results come back as user messages.
+      const blocks = (msg.message && Array.isArray(msg.message.content)) ? msg.message.content : [];
+      for (const b of blocks) if (b && b.type === "tool_result") sync.toolResult(b);
     } else if (msg.type === "result") {
-      const ok = msg.subtype === "success";
-      emit(res, {
-        type: "done",
-        ok,
-        error: ok ? undefined : msg.subtype,
-        detail: ok ? undefined : (stderrTail.filter((l) => !/^\s*at /.test(l)).slice(-3).join(" · ") || undefined),
-      });
+      emit(res, doneEvent(msg, { sawText, stderrTail }));
     }
   }
   res.end();

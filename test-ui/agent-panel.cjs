@@ -38,6 +38,9 @@ function findChrome() {
 }
 
 async function main() {
+  // Editor-mode servers record their folder in the recent list; keep the
+  // fixtures out of the real ~/.fethr/recent.json.
+  process.env.FETHR_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "fethr-ui-state-"));
   const puppeteer = require("puppeteer-core");
   const { serve } = require("../src/server.js");
   // The URL carries the per-launch token in its fragment; node-side calls

@@ -13,6 +13,10 @@ import { apiFetch } from "./auth.js";
 // fileURLToPath, not .pathname: on Windows the latter is "/D:/…", which is not a path.
 const BIN = fileURLToPath(new URL("../bin/fethr.js", import.meta.url));
 
+// The spawned servers inherit this; without it each would add its temp root
+// to the real ~/.fethr/recent.json.
+process.env.FETHR_STATE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "fethr-state-"));
+
 function launch(extraArgs) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "fethr-life-"));
   const child = spawn(process.execPath, [BIN, root, "--sidecar", ...extraArgs], {

@@ -6,6 +6,9 @@ import { EditorState, Compartment } from "@codemirror/state";
 import { indentWithTab } from "@codemirror/commands";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { THEMES, loadTheme, saveTheme, isDark } from "./theme.js";
+import { loadPrefs } from "./prefs.js";
+import { claimEsc } from "./keys.js";
+import { mountHome } from "./home.js";
 import { javascript } from "@codemirror/lang-javascript";
 import { python } from "@codemirror/lang-python";
 import { markdown } from "@codemirror/lang-markdown";
@@ -28,6 +31,16 @@ const langBy = (p) => {
 const $ = (s) => document.querySelector(s);
 const langC = new Compartment();
 
+// The per-launch token from the URL fragment (src/server.js). Every /api
+// call carries it; without it the server answers 401.
+const TOKEN = new URLSearchParams(location.hash.slice(1)).get("t") || "";
+const f = (url, init = {}) => fetch(url, { ...init, headers: { ...(init.headers || {}), "x-fethr-token": TOKEN } });
+
+// Preferences (web/prefs.js): server-kept, so they survive a relaunch on a
+// new port. Loaded before the theme is applied; body.booting hides the page
+// until boot() runs. Same interface as localStorage.
+const prefs = await loadPrefs(f);
+
 // ---- theme (web/theme.js) ----
 // Colours are CSS, keyed off <html data-theme>. CodeMirror is the one part
 // that cannot follow a CSS variable for its syntax palette, so it gets
@@ -35,7 +48,7 @@ const langC = new Compartment();
 // its surfaces pointed at the same tokens as the rest of the page.
 const themeC = new Compartment();
 const prefersDark = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : { matches: true, addEventListener() {} };
-let themeId = loadTheme(localStorage);
+let themeId = loadTheme(prefs);
 const surface = EditorView.theme({
   "&": { backgroundColor: "var(--bg)", color: "var(--ink)" },
   ".cm-gutters": { backgroundColor: "var(--bg)", color: "var(--muted)", borderRight: "1px solid var(--rule)" },
@@ -62,11 +75,6 @@ let dirty = false;
 // no app-vs-CLI branching to carry.
 import { decide, fetchManifest, isEnabled, ENABLED_KEY } from "./update.js";
 
-// The per-launch token from the URL fragment (src/server.js). Every /api
-// call carries it; without it the server answers 401.
-const TOKEN = new URLSearchParams(location.hash.slice(1)).get("t") || "";
-const f = (url, init = {}) => fetch(url, { ...init, headers: { ...(init.headers || {}), "x-fethr-token": TOKEN } });
-
 const api = {
   meta: () => f("/api/meta").then((r) => r.json()),
   tree: () => f("/api/tree").then((r) => r.json()),
@@ -88,6 +96,9 @@ const setStatus = (t) => { $("#status").textContent = t; };
 let autoSaveTimer = null;
 function scheduleAutoSave() {
   if (!$("#autosave").checked) return;
+  // While the disk banner asks Reload / Keep mine, an autosave would answer
+  // for the person (and overwrite the agent's change). ⌘S still saves.
+  if (!$("#disk-banner").hidden) return;
   clearTimeout(autoSaveTimer);
   autoSaveTimer = setTimeout(() => {
     if (dirty) save();
@@ -105,12 +116,12 @@ const markDirty = (d, skipAutosave) => {
 };
 
 try {
-  const v = localStorage.getItem("fethr.autoSave");
+  const v = prefs.getItem("fethr.autoSave");
   $("#autosave").checked = v === null ? true : v === "1"; // on by default
 } catch { /* private mode — stays checked, just doesn't persist */ }
 $("#autosave").onchange = () => {
   try {
-    localStorage.setItem("fethr.autoSave", $("#autosave").checked ? "1" : "0");
+    prefs.setItem("fethr.autoSave", $("#autosave").checked ? "1" : "0");
   } catch { /* ignore */ }
 };
 
@@ -159,6 +170,7 @@ async function openFile(p) {
     return false;
   }
   current = p;
+  $("#disk-banner").hidden = true;
   view.setState(EditorState.create({ doc: content, extensions: extensions() }));
   markDirty(false);
   setStatus("opened");
@@ -187,6 +199,9 @@ async function save() {
 // depth stack is enough to build the nested accordion — no second tree pass.
 function renderTree(entries) {
   const el = $("#tree");
+  // A refresh (the agent changed files) keeps what was folded and the scroll.
+  const collapsed = new Set([...el.querySelectorAll(".dir-row.collapsed")].map((r) => r.dataset.dir));
+  const scroll = el.scrollTop;
   el.innerHTML = "";
   const stack = [{ depth: 0, el }];
   for (const n of entries) {
@@ -204,6 +219,11 @@ function renderTree(entries) {
       row.append(chev, document.createTextNode(name));
       const children = document.createElement("div");
       children.className = "children";
+      row.dataset.dir = n.path;
+      if (collapsed.has(n.path)) {
+        row.classList.add("collapsed");
+        children.classList.add("collapsed");
+      }
       row.onclick = () => {
         row.classList.toggle("collapsed");
         children.classList.toggle("collapsed");
@@ -215,16 +235,36 @@ function renderTree(entries) {
       row.textContent = name;
       row.dataset.p = n.path;
       row.onclick = () => openFile(n.path);
+      if (n.path === current) row.classList.add("active");
       parent.appendChild(row);
     }
   }
+  el.scrollTop = scroll;
 }
 
 let fileList = [];
 let gitBranch = null; // real, server-checked — never let the agent guess this
+// Home mode (docs/plans/home-screen.md): the server has no root, so boot()
+// mounts web/home.js instead of the editor and the editor's shortcuts stand down.
+let homeMode = false;
+let workspaceRoot = null; // absolute; file-changed paths may come either way
 
 async function boot() {
-  const meta = await api.meta();
+  let meta;
+  try {
+    meta = await api.meta();
+  } finally {
+    document.body.classList.remove("booting");
+  }
+  if (meta.mode === "home") {
+    homeMode = true;
+    document.body.classList.add("home-mode");
+    document.title = "fethr";
+    const home = $("#home");
+    home.hidden = false;
+    return mountHome(home, { f, renderMd }); // renderMd escapes before it marks up
+  }
+  workspaceRoot = typeof meta.root === "string" ? meta.root : null;
   $("#root").textContent = meta.name;
   document.title = `${meta.name} — fethr`;
   gitBranch = meta.gitBranch || null;
@@ -236,7 +276,11 @@ async function boot() {
   const tree = await api.tree();
   fileList = tree.filter((n) => !n.dir).map((n) => n.path);
   renderTree(tree);
-  await restoreChat();
+  // A window opened on a past session is about the conversation: it starts
+  // agent-only (files hidden). Either kind of window remembers its own choice.
+  setFilesHidden(loadFilesHidden(Boolean(meta.resume && meta.resume.id)));
+  if (meta.resume && meta.resume.id) await resumeSession(meta.resume, meta.name);
+  else await restoreChat();
 }
 
 window.addEventListener("beforeunload", (e) => {
@@ -252,7 +296,7 @@ const toggleSidebar = () => {
   document.body.classList.toggle("sidebar-collapsed");
   syncSidebarIcon();
   try {
-    localStorage.setItem(
+    prefs.setItem(
       "fethr.sidebarCollapsed",
       document.body.classList.contains("sidebar-collapsed") ? "1" : "0"
     );
@@ -260,13 +304,14 @@ const toggleSidebar = () => {
 };
 $("#toggle-sidebar").onclick = toggleSidebar;
 try {
-  if (localStorage.getItem("fethr.sidebarCollapsed") === "1") {
+  if (prefs.getItem("fethr.sidebarCollapsed") === "1") {
     document.body.classList.add("sidebar-collapsed");
   }
 } catch { /* ignore */ }
 syncSidebarIcon();
 
 window.addEventListener("keydown", (e) => {
+  if (homeMode) return;
   if ((e.metaKey || e.ctrlKey) && e.key === "b") {
     e.preventDefault();
     toggleSidebar();
@@ -288,7 +333,7 @@ function makeResizer(handle, { cssVar, min, max, storageKey, beforeStart }) {
     document.removeEventListener("mouseup", onUp);
     const w = parseInt(getComputedStyle(document.documentElement).getPropertyValue(cssVar), 10);
     try {
-      localStorage.setItem(storageKey, String(w));
+      prefs.setItem(storageKey, String(w));
     } catch { /* ignore */ }
   };
   handle.addEventListener("mousedown", (e) => {
@@ -319,7 +364,7 @@ makeResizer($("#resize-sidebar"), {
   },
 });
 try {
-  const w = parseInt(localStorage.getItem("fethr.sidebarWidth"), 10);
+  const w = parseInt(prefs.getItem("fethr.sidebarWidth"), 10);
   if (w >= 160 && w <= 480) document.documentElement.style.setProperty("--sidebar-w", w + "px");
 } catch { /* ignore */ }
 
@@ -336,10 +381,56 @@ makeResizer($("#resize-agent"), {
 // ---------- agent panel ----------
 
 let agentSession = null;
+// True from a "fork" launch until the agent's init event hands back the new
+// session id. Cleared there, not when the request is sent: a request that
+// fails before init must not leave agentSession pointing at the original
+// with no fork flag, or the next message would append to the original.
+let pendingFork = false;
 let streaming = false;
 
 const chatEl = $("#chat");
 const inputEl = $("#input");
+
+// ---------- scroll-follow ----------
+// New content scrolls the transcript only when the reader is already at the
+// bottom (within FOLLOW_PX). Someone reading further up stays put and gets a
+// "Latest ↓" pill instead.
+const FOLLOW_PX = 48;
+const latestBtn = $("#latest");
+const nearBottom = () => chatEl.scrollHeight - chatEl.scrollTop - chatEl.clientHeight <= FOLLOW_PX;
+function scrollChatToEnd() {
+  chatEl.scrollTop = chatEl.scrollHeight;
+  latestBtn.hidden = true;
+}
+function follow(change) {
+  const stick = nearBottom();
+  const out = change();
+  if (stick) scrollChatToEnd();
+  else latestBtn.hidden = false;
+  return out;
+}
+latestBtn.onclick = () => {
+  chatEl.scrollTo({ top: chatEl.scrollHeight, behavior: "smooth" });
+  latestBtn.hidden = true;
+};
+chatEl.addEventListener("scroll", () => { if (nearBottom()) latestBtn.hidden = true; });
+
+// ---------- turn list (agent-only, wide windows): one row per prompt ----------
+const turnsEl = $("#turns");
+function addTurn(msgEl, text) {
+  const b = document.createElement("button");
+  b.type = "button";
+  const n = document.createElement("span");
+  n.className = "n";
+  n.textContent = String(turnsEl.children.length + 1);
+  const t = document.createElement("span");
+  t.className = "t";
+  t.textContent = text;
+  b.append(n, t);
+  b.title = text.slice(0, 300);
+  b.onclick = () => msgEl.scrollIntoView({ block: "start", behavior: "smooth" });
+  turnsEl.appendChild(b);
+}
 
 // ---------- context bar — makes what's actually sent to the agent visible ----------
 // The current file + live selection (auto), plus any files attached with @.
@@ -486,7 +577,7 @@ const toggleAgent = () => {
   if (opening) {
     let w = 340;
     try {
-      const saved = parseInt(localStorage.getItem("fethr.agentWidth"), 10);
+      const saved = parseInt(prefs.getItem("fethr.agentWidth"), 10);
       if (saved >= 260 && saved <= 640) w = saved;
     } catch { /* ignore */ }
     document.documentElement.style.setProperty("--agent-w", w + "px");
@@ -495,8 +586,66 @@ const toggleAgent = () => {
     document.documentElement.style.setProperty("--agent-w", "0px");
   }
 };
-$("#toggle-agent").onclick = toggleAgent;
+$("#toggle-agent").onclick = () => {
+  // Closing the agent while the files are hidden would leave nothing on
+  // screen, so bring the files back with it.
+  if (document.body.classList.contains("agent-open") && filesHidden()) setFilesHidden(false);
+  toggleAgent();
+};
+
+// ---------- files view: show/hide the sidebar + editor (⌘E) ----------
+// Agent-only is a class: it owns visibility and the grid's track list only.
+// Widths stay JS-owned (--agent-w is set by toggleAgent), per ARCHITECTURE.md's
+// custom-property cascade trap. Remembered per window in sessionStorage.
+const FILES_KEY = "fethr.filesHidden";
+const filesHidden = () => document.body.classList.contains("files-hidden");
+function loadFilesHidden(fallback) {
+  try {
+    const v = sessionStorage.getItem(FILES_KEY);
+    if (v === "1" || v === "0") return v === "1";
+  } catch { /* storage blocked: use the window's default */ }
+  return fallback;
+}
+function setFilesHidden(hide) {
+  if (!hide && document.body.classList.contains("focus-mode")) setFocus(false);
+  document.body.classList.toggle("files-hidden", hide);
+  if (hide && !document.body.classList.contains("agent-open")) toggleAgent();
+  $("#toggle-files").setAttribute("aria-pressed", String(!hide));
+  $("#toggle-files").title = hide ? "Show files and the editor (⌘E)" : "Hide files and the editor: the agent takes the window (⌘E)";
+  try {
+    sessionStorage.setItem(FILES_KEY, hide ? "1" : "0");
+  } catch { /* not remembered, still applied */ }
+  if (!hide) view.requestMeasure(); // CodeMirror measured nothing while hidden
+}
+$("#toggle-files").onclick = () => setFilesHidden(!filesHidden());
+
+// ---------- focus: agent-only with no chrome, only transcript + composer ----------
+// ⌘⇧F or the header's "focus" button; the corner button or Esc leaves it.
+const inFocus = () => document.body.classList.contains("focus-mode");
+function setFocus(on) {
+  if (on && !filesHidden()) setFilesHidden(true);
+  document.body.classList.toggle("focus-mode", on);
+  $("#exit-focus").hidden = !on;
+  if (on) inputEl.focus();
+}
+$("#focus-btn").onclick = () => setFocus(true);
+$("#exit-focus").onclick = () => setFocus(false);
 window.addEventListener("keydown", (e) => {
+  if (homeMode) return;
+  if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "f") {
+    e.preventDefault();
+    setFocus(!inFocus());
+  } else if (e.key === "Escape" && inFocus() && claimEsc(e)) {
+    setFocus(false); // registered on window: anything nearer claimed Esc first
+  }
+});
+window.addEventListener("keydown", (e) => {
+  if (homeMode) return;
+  if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "e") {
+    e.preventDefault();
+    setFilesHidden(!filesHidden());
+    return;
+  }
   if ((e.metaKey || e.ctrlKey) && e.key === "j") {
     e.preventDefault();
     toggleAgent();
@@ -513,8 +662,7 @@ function addMsg(cls, who, text) {
     d.appendChild(w);
   }
   d.appendChild(document.createTextNode(text));
-  chatEl.appendChild(d);
-  chatEl.scrollTop = chatEl.scrollHeight;
+  follow(() => chatEl.appendChild(d));
   return d;
 }
 
@@ -617,8 +765,7 @@ function renderProposal(p, opts = {}) {
     actions.append(accept, reject);
   }
   box.appendChild(actions);
-  chatEl.appendChild(box);
-  chatEl.scrollTop = chatEl.scrollHeight;
+  follow(() => chatEl.appendChild(box));
 }
 
 // Minimal safe markdown: escape everything, then fences / file:line refs /
@@ -627,7 +774,12 @@ function renderProposal(p, opts = {}) {
 // inline-code regex excludes `<` so it never re-wraps the anchor it made.
 function renderMd(el, raw) {
   const esc = raw.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  let html = esc.replace(/```(\w*)\n([\s\S]*?)```/g, (_, _lang, code) => `<pre>${code}</pre>`);
+  // Fences out first (their lines are not headings or lists), blocks on the
+  // escaped text, fences back before the inline rules as before.
+  const fences = [];
+  let html = esc.replace(/```(\w*)\n([\s\S]*?)```/g, (_, _lang, code) => `\u0000${fences.push(`<pre>${code}</pre>`) - 1}\u0000`);
+  html = mdBlocks(html);
+  html = html.replace(/\u0000(\d+)\u0000/g, (_, i) => fences[Number(i)]);
   html = html.replace(/\b([\w./-]+\.\w+):(\d+)(-\d+)?\b/g, (m, p, l1, l2) => {
     if (!fileList.includes(p) && !fileList.some((f) => f.endsWith("/" + p))) return m;
     return `<a href="#" class="fileref" data-p="${p}" data-l1="${l1}" data-l2="${l2 ? l2.slice(1) : ""}">${m}</a>`;
@@ -635,6 +787,41 @@ function renderMd(el, raw) {
   html = html.replace(/`([^`\n<]+)`/g, "<code>$1</code>");
   html = html.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
   el.innerHTML = html;
+}
+
+// Block markdown on already-escaped text: # to ### headings, - / * and 1.
+// lists, > quotes (">" arrives escaped as &gt;). Only fixed tags and a
+// digits-only start= are added, so nothing from the text becomes markup.
+function mdBlocks(text) {
+  const out = [];
+  let list = null, quote = null;
+  const flush = () => {
+    if (list) out.push(`<${list.tag}${list.start > 1 ? ` start="${list.start}"` : ""}>${list.items.map((i) => `<li>${i}</li>`).join("")}</${list.tag}>`);
+    if (quote) out.push(`<blockquote>${quote.join("\n")}</blockquote>`);
+    list = quote = null;
+  };
+  for (const line of text.split("\n")) {
+    let m;
+    if ((m = line.match(/^(#{1,3}) +(.+)$/))) {
+      flush();
+      const tag = "h" + (m[1].length + 2); // h3–h5: inside a message, never louder than the page
+      out.push(`<${tag}>${m[2]}</${tag}>`);
+    } else if ((m = line.match(/^\s*[-*] +(.+)$/))) {
+      if (!list || list.tag !== "ul") { flush(); list = { tag: "ul", items: [] }; }
+      list.items.push(m[1]);
+    } else if ((m = line.match(/^\s*(\d{1,4})[.)] +(.+)$/))) {
+      if (!list || list.tag !== "ol") { flush(); list = { tag: "ol", start: Number(m[1]), items: [] }; }
+      list.items.push(m[2]);
+    } else if ((m = line.match(/^&gt; ?(.*)$/))) {
+      if (!quote) { flush(); quote = []; }
+      quote.push(m[1]);
+    } else {
+      flush();
+      out.push(line + "\n");
+    }
+  }
+  flush();
+  return out.join("").replace(/\n$/, "");
 }
 
 async function jumpToFileRef(p, l1raw, l2raw) {
@@ -666,7 +853,15 @@ chatEl.addEventListener("click", (e) => {
 
 let transcript = [];
 
+// A window opened on a past session (resumeSession) never writes chat.json:
+// that session lives in ~/.claude/projects and is reachable from home, and
+// writing here would replace the folder's own conversation.
+let resumeMode = false;
+let resumedId = null; // the original session's id, kept after a fork replaces agentSession
+let resumedSource = null; // where it was started ("CLI", "VS Code / Cursor", …), sent with every request
+
 function persistChat() {
+  if (resumeMode) return;
   api.saveChat({ session: agentSession, entries: transcript });
 }
 
@@ -675,7 +870,11 @@ function persistChat() {
 // a proposal must never auto-apply itself just because it's being
 // redisplayed and the Auto checkbox happens to be on right now.
 function renderEntry(entry, live = false) {
-  if (entry.type === "user") return addMsg("user", "you", entry.text);
+  if (entry.type === "user") {
+    const el = addMsg("user", "you", entry.text);
+    addTurn(el, entry.text);
+    return el;
+  }
   if (entry.type === "assistant") {
     const el = addMsg("assistant", "agent", "");
     renderMd(el, entry.text);
@@ -686,7 +885,7 @@ function renderEntry(entry, live = false) {
     box.className = "thought";
     box.innerHTML = "<summary>thought</summary><div class='ttext'></div>";
     box.querySelector(".ttext").textContent = entry.text;
-    chatEl.appendChild(box);
+    follow(() => chatEl.appendChild(box));
     return box;
   }
   if (entry.type === "tool") return addMsg("tool", null, entry.text);
@@ -710,6 +909,45 @@ async function restoreChat() {
   addMsg("tool", null, "— restored earlier conversation —");
 }
 
+// Launched with --session (meta.resume): show that session's history from
+// ~/.claude/projects instead of .fethr/chat.json, and point the agent at it.
+// History text is untrusted; renderEntry renders it as text or escaped md.
+const HISTORY_TYPES = new Set(["user", "assistant", "tool"]);
+async function resumeSession(resume, folder) {
+  resumeMode = true;
+  resumedId = resume.id;
+  agentSession = resume.id;
+  pendingFork = Boolean(resume.fork);
+  resumedSource = typeof resume.source === "string" ? resume.source : null;
+  const title = resume.title || "untitled session";
+  const label = `${title} · ${resume.id.slice(0, 8)} · ${folder}`;
+  document.title = `${label} — fethr`;
+  $("#agent-title").textContent = label;
+  $("#agent-title").title = `${resume.fork ? "Forked from" : "Resumed"} session ${resume.id} in ${folder}`;
+  let hist = null, why = "server not answering";
+  try {
+    const r = await f(`/api/session-history?id=${encodeURIComponent(resume.id)}`);
+    const data = await r.json().catch(() => null);
+    if (r.ok) hist = data;
+    else why = (data && data.error) || `error ${r.status}`;
+  } catch { /* why stays as set */ }
+  if (!resumedSource && hist && typeof hist.source === "string") resumedSource = hist.source;
+  if (!hist || !Array.isArray(hist.entries)) {
+    addMsg("tool", null, `— couldn't load this session's earlier turns: ${hist ? "unreadable reply" : why} —`);
+  } else {
+    if (hist.omitted > 0) addMsg("tool", null, `— ${hist.omitted} earlier turns not shown —`);
+    else if (hist.truncated) addMsg("tool", null, "— earlier turns not shown —");
+    for (const e of hist.entries) {
+      if (!e || !HISTORY_TYPES.has(e.type) || typeof e.text !== "string") continue;
+      const entry = { type: e.type, text: e.type === "tool" ? `⚙ ${e.text}` : e.text };
+      transcript.push(entry);
+      renderEntry(entry); // live defaults false
+    }
+  }
+  addMsg("tool", null, pendingFork ? `— forked from: ${title} (original untouched) —` : `— resumed session: ${title} —`);
+  if (!document.body.classList.contains("agent-open")) toggleAgent();
+}
+
 const statusEl = document.querySelector("#agent-status");
 const phaseEl = $("#phase");
 let abortCtl = null;
@@ -727,15 +965,16 @@ $("#stop").onclick = () => abortCtl && abortCtl.abort();
 
 $("#model").onchange = () => {
   agentSession = null;
+  pendingFork = false;
   addMsg("tool", null, `model → ${$("#model").value || "default"} (new conversation)`);
 };
 
 try {
-  $("#auto").checked = localStorage.getItem("fethr.autoApply") === "1";
+  $("#auto").checked = prefs.getItem("fethr.autoApply") === "1";
 } catch { /* ignore */ }
 $("#auto").onchange = () => {
   try {
-    localStorage.setItem("fethr.autoApply", $("#auto").checked ? "1" : "0");
+    prefs.setItem("fethr.autoApply", $("#auto").checked ? "1" : "0");
   } catch { /* ignore */ }
 };
 
@@ -751,7 +990,123 @@ function markFableUnavailable() {
   }
   $("#model").value = "";
   agentSession = null;
+  pendingFork = false;
   addMsg("tool", null, "fable 5 isn't available on this account — switched back to default.");
+}
+
+// ---------- agent mode: read-only (default) or full ----------
+// Full is Claude Code in its auto permission mode (server side): tools run
+// without asking and a classifier may block risky ones. Opt-in per window,
+// remembered only for this window (sessionStorage). Switching keeps the
+// session; the next message uses the new mode.
+const MODE_KEY = "fethr.agentMode";
+const READONLY_NOTE = $("#composer-note").textContent;
+let agentMode = "readonly";
+try {
+  if (sessionStorage.getItem(MODE_KEY) === "full") agentMode = "full";
+} catch { /* storage blocked: read-only */ }
+function applyMode() {
+  const full = agentMode === "full";
+  document.body.classList.toggle("agent-full", full);
+  $("#mode-note").hidden = !full;
+  $("#composer-note").textContent = full
+    ? "Full Claude Code: reads, edits and runs commands in this folder without asking. Uses your Claude Code login."
+    : READONLY_NOTE;
+  for (const b of document.querySelectorAll("#mode button")) {
+    b.setAttribute("aria-checked", String(b.dataset.mode === agentMode));
+  }
+}
+function setMode(mode) {
+  if (mode === agentMode) return;
+  agentMode = mode;
+  try {
+    sessionStorage.setItem(MODE_KEY, mode);
+  } catch { /* applied, not remembered */ }
+  applyMode();
+  addMsg("tool", null, `mode → ${mode === "full" ? "full" : "read-only"} (from the next message; same conversation)`);
+}
+for (const b of document.querySelectorAll("#mode button")) b.onclick = () => setMode(b.dataset.mode);
+applyMode();
+
+// ---------- keeping the editor in step with what the agent changed ----------
+// The open file: reloaded in place when the buffer is clean, a Reload / Keep
+// mine banner when it has unsaved edits. The tree: re-fetched, folds kept.
+async function syncOpenFile() {
+  if (!current) return;
+  const p = current;
+  let disk;
+  try {
+    disk = await api.read(p);
+  } catch {
+    return; // deleted or unreadable: leave the buffer alone
+  }
+  if (p !== current || disk === view.state.doc.toString()) return;
+  if (dirty) {
+    $("#disk-banner").hidden = false;
+    clearTimeout(autoSaveTimer);
+    return;
+  }
+  replaceBuffer(disk);
+  setStatus("updated by agent");
+  setTimeout(() => { if ($("#status").textContent === "updated by agent") setStatus(""); }, 2500);
+}
+
+// Swap in the disk content without counting it as an edit, keeping the
+// cursor (clamped) and the scroll position.
+function replaceBuffer(content) {
+  const sel = view.state.selection.main;
+  const top = view.scrollDOM.scrollTop;
+  view.setState(EditorState.create({ doc: content, extensions: extensions() }));
+  const len = view.state.doc.length;
+  view.dispatch({ selection: { anchor: Math.min(sel.anchor, len), head: Math.min(sel.head, len) } });
+  view.scrollDOM.scrollTop = top;
+  markDirty(false);
+  $("#disk-banner").hidden = true;
+}
+
+$("#disk-reload").onclick = async () => {
+  try {
+    replaceBuffer(await api.read(current));
+    setStatus("reloaded from disk");
+  } catch {
+    setStatus(`could not read ${current}`);
+  }
+};
+$("#disk-keep").onclick = () => {
+  $("#disk-banner").hidden = true; // the next save writes yours over the agent's
+  scheduleAutoSave();
+};
+
+function relPath(p) {
+  const s = String(p || "");
+  if (workspaceRoot && s.startsWith(workspaceRoot + "/")) return s.slice(workspaceRoot.length + 1);
+  return s.replace(/^\.\//, "");
+}
+
+let treeTimer = null;
+function refreshWorkspace() {
+  clearTimeout(treeTimer);
+  treeTimer = setTimeout(async () => {
+    try {
+      const tree = await api.tree();
+      fileList = tree.filter((n) => !n.dir).map((n) => n.path);
+      renderTree(tree);
+    } catch { /* keep the old tree */ }
+    syncOpenFile();
+  }, 150);
+}
+
+// Tell the server which chat this folder is on (home's Recent list shows it),
+// once per session id, including the new id a fork gets. Fire-and-forget.
+const reportedSessions = new Set();
+function reportRecentSession(id) {
+  if (!id || reportedSessions.has(id)) return;
+  reportedSessions.add(id);
+  f("/api/recent", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ session: id }),
+  }).catch(() => {});
 }
 
 async function askAgent(prompt) {
@@ -759,7 +1114,12 @@ async function askAgent(prompt) {
   abortCtl = new AbortController();
   const selectedModel = $("#model").value || undefined;
   let sawSession = false;
+  let sawError = false; // an error/ended/stopped line already explains a missing reply
+  let doneDetail = null;
+  let replyNote = false; // the bubble got a plain-text error instead of a reply
+  const runMode = agentMode; // a switch mid-run applies from the next message
   recordAndAdd({ type: "user", text: prompt });
+  scrollChatToEnd(); // your own message always brings you to the bottom
   const reply = addMsg("assistant", "agent", "");
   let replyRaw = "";
   let thoughtBox = null, thoughtRaw = "";
@@ -791,16 +1151,20 @@ async function askAgent(prompt) {
       body: JSON.stringify({
         prompt,
         sessionId: agentSession,
+        fork: pendingFork && Boolean(agentSession),
         context,
         extraFiles,
         gitBranch,
         model: selectedModel,
+        mode: runMode,
+        ...(resumeMode ? { resumed: { source: resumedSource } } : {}),
       }),
     });
     if (!r.ok || !r.body) {
       const err = await r.json().catch(() => ({}));
-      if (selectedModel === "fable") return markFableUnavailable();
+      if (selectedModel === "fable") { sawError = true; return markFableUnavailable(); }
       reply.appendChild(document.createTextNode(err.error || `agent error (${r.status})`));
+      replyNote = true;
       return;
     }
     const reader = r.body.getReader();
@@ -818,12 +1182,13 @@ async function askAgent(prompt) {
         const ev = JSON.parse(chunk.slice(6));
         if (ev.type === "session") {
           agentSession = ev.id;
+          pendingFork = false;
           sawSession = true;
+          reportRecentSession(ev.id);
         } else if (ev.type === "delta") {
           replyRaw += ev.text;
-          reply.textContent = replyRaw;
+          follow(() => { reply.textContent = replyRaw; });
           setPhase("writing…");
-          chatEl.scrollTop = chatEl.scrollHeight;
         } else if (ev.type === "thinking") {
           if (!thoughtBox) {
             thoughtBox = document.createElement("details");
@@ -832,7 +1197,7 @@ async function askAgent(prompt) {
             reply.parentNode.insertBefore(thoughtBox, reply);
           }
           thoughtRaw += ev.text;
-          thoughtBox.querySelector(".ttext").textContent = thoughtRaw;
+          follow(() => { thoughtBox.querySelector(".ttext").textContent = thoughtRaw; });
           setPhase("thinking…");
         } else if (ev.type === "phase") {
           setPhase(ev.phase === "thinking" ? "thinking…" : "writing…");
@@ -841,37 +1206,173 @@ async function askAgent(prompt) {
           recordAndAdd({ type: "tool", text: `⚙ ${ev.name}${ev.detail ? " " + ev.detail : ""}` });
         } else if (ev.type === "proposal") {
           recordAndAdd({ type: "proposal", path: ev.path, content: ev.content, note: ev.note });
+        } else if (ev.type === "file-changed") {
+          if (ev.outside) recordAndAdd({ type: "tool", text: `changed outside this folder: ${ev.path}` });
+          else if (relPath(ev.path) === current) syncOpenFile();
+          else refreshWorkspace(); // maybe a new file: the tree should show it
+        } else if (ev.type === "maybe-changed") {
+          refreshWorkspace();
+        } else if (ev.type === "tool-denied") {
+          recordAndAdd({ type: "tool", text: `blocked: ${ev.name}${ev.detail ? " — " + ev.detail : ""}` });
         } else if (ev.type === "error") {
+          sawError = true;
           if (selectedModel === "fable" && !sawSession) markFableUnavailable();
-          else recordAndAdd({ type: "tool", text: `error: ${ev.message}` });
+          else offerForkIfBusy(recordAndAdd({ type: "tool", text: `error: ${ev.message}` }));
+        } else if (ev.type === "done" && ev.ok && typeof ev.detail === "string") {
+          doneDetail = ev.detail;
         } else if (ev.type === "done" && !ev.ok) {
+          sawError = true;
           if (selectedModel === "fable" && !sawSession) markFableUnavailable();
-          else recordAndAdd({ type: "tool", text: `ended: ${ev.error}${ev.detail ? " — " + ev.detail : ""}` });
+          else offerForkIfBusy(recordAndAdd({ type: "tool", text: `ended: ${ev.error}${ev.detail ? " — " + ev.detail : ""}` }));
         }
       }
     }
   } catch (e) {
+    sawError = true;
     if (e.name === "AbortError") recordAndAdd({ type: "tool", text: "stopped" });
     else recordAndAdd({ type: "tool", text: `agent unreachable: ${e.message}` });
   } finally {
     if (replyRaw) {
-      renderMd(reply, replyRaw);
+      follow(() => renderMd(reply, replyRaw));
       transcript.push({ type: "assistant", text: replyRaw });
+    } else if (!replyNote) {
+      // Never leave an empty agent bubble: say why there is no text, or drop
+      // it when an error line below already does.
+      if (sawError && !doneDetail) reply.remove();
+      else {
+        reply.classList.add("no-reply");
+        follow(() => reply.appendChild(document.createTextNode(doneDetail || "no reply")));
+      }
     }
     if (thoughtBox) {
       thoughtBox.querySelector("summary").textContent = "thought";
       transcript.push({ type: "thought", text: thoughtRaw });
     }
     if (replyRaw || thoughtBox) persistChat();
+    if (runMode === "full") refreshWorkspace(); // a full run may have changed anything
     setPhase(null);
     streaming = false;
     abortCtl = null;
   }
 }
 
+// A resumed session that Claude Code is still running (a background session,
+// or one open in a terminal) cannot be resumed here; the CLI says so and
+// suggests --fork-session. Offer that as one click: a new window on a fork,
+// leaving the original alone. Matching the CLI's wording is a fallback only:
+// the home screen already disables Resume for sessions the server reports as
+// open, and this catches the ones it could not see (opened after the list
+// loaded, or not reported). If the wording changes, the button just doesn't
+// appear and the plain error remains.
+const BUSY_SESSION_RE = /running in the background|--fork-session/;
+// "running in the background (abcdef12)" names a background session; only
+// then is attaching an option (the `claude attach` command is background-only).
+const BACKGROUND_ID_RE = /running in the background \(([0-9a-f]{8})/;
+function offerForkIfBusy(msgEl) {
+  if (!resumeMode || !resumedId || !msgEl || !BUSY_SESSION_RE.test(msgEl.textContent)) return;
+  const bg = msgEl.textContent.match(BACKGROUND_ID_RE);
+  const row = document.createElement("div");
+  row.className = "fork-offer";
+  const note = document.createElement("span");
+  const offer = (label, title, url, body, done, failed) => {
+    const btn = document.createElement("button");
+    btn.textContent = label;
+    btn.title = title;
+    btn.onclick = async () => {
+      btn.disabled = true;
+      note.textContent = "opening…";
+      try {
+        const r = await f(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (r.ok && (data.ok || data.pending)) {
+          note.textContent = done;
+          return;
+        }
+        note.textContent = failed(r, data);
+      } catch {
+        note.textContent = "server not answering";
+      }
+      btn.disabled = false;
+    };
+    return btn;
+  };
+  const why = (r, data) => [data.error || r.status, data.hint].filter(Boolean).join(" — ");
+  row.appendChild(offer("Fork instead", "Open a new window on a copy of this session; the original is untouched",
+    "/api/open", { session: resumedId, fork: true }, "opening a fork in a new window…",
+    (r, data) => `couldn't fork: ${why(r, data)}`));
+  if (bg) {
+    row.appendChild(offer("Attach in Terminal", `Open the running session in Terminal (claude attach ${bg[1]})`,
+      "/api/session-action", { id: resumedId, action: "attach" }, "opening it in Terminal…",
+      (r, data) => r.status === 501
+        ? `Attach needs macOS Terminal — run \`claude attach ${bg[1]}\``
+        : `couldn't attach: ${why(r, data)}`));
+  }
+  row.appendChild(note);
+  msgEl.appendChild(row);
+}
+
+// ---------- slash commands: answered here, never sent to the agent ----------
+// "/name" at the start (a path like /Users/x/a.js is not one: the name must
+// end at a space or the end). fethr's agent is not Claude Code's REPL, so its
+// slash commands do nothing here; say so, and say where the real thing is.
+const SLASH_RE = /^\/([a-z][\w:-]*)(\s|$)/i;
+function terminalHint() {
+  const id = agentSession || resumedId;
+  // The full id: per `claude --help`, --resume takes a session ID, and
+  // anything else opens its picker as a search term.
+  if (!id) return "For full Claude Code, run `claude` in a terminal in this folder.";
+  return `For full Claude Code, run \`claude --resume ${id}${pendingFork ? " --fork-session" : ""}\` in a terminal.`;
+}
+function localCard(lines) {
+  const d = document.createElement("div");
+  d.className = "msg local-card";
+  for (const [tag, text] of lines) {
+    const n = document.createElement(tag);
+    n.textContent = text;
+    d.appendChild(n);
+  }
+  follow(() => chatEl.appendChild(d));
+  return d;
+}
+function slashCommand(text) {
+  const name = text.match(SLASH_RE)[1].toLowerCase();
+  addMsg("user", "you", text); // shown, not sent, not saved
+  if (name === "permissions" || name === "tools") {
+    // The card describes the mode the next message will run in.
+    const card = agentMode === "full" ? localCard([
+      ["b", "Full mode: Claude Code's tools, without asking"],
+      ["li", "Read, search, edit and write files; run commands; fetch from the web; start subagents"],
+      ["li", "Claude Code's auto mode decides: a classifier can block risky actions, and you'll see a \"blocked\" line when it does"],
+      ["li", "Your Claude Code settings, hooks and CLAUDE.md files apply, as in a terminal"],
+      ["p", "Switch to read-only in the agent header to go back to proposals only."],
+    ]) : localCard([
+      ["b", "What fethr's agent can do"],
+      ["li", "Read files in this folder"],
+      ["li", "Search them (Grep, Glob)"],
+      ["li", "Propose an edit — you review and accept it in the editor; nothing is written until you save"],
+      ["b", "Turned off by design"],
+      ["li", "Bash (running commands)"],
+      ["li", "Write / Edit (changing files directly)"],
+      ["li", "Web fetch and search"],
+      ["li", "Subagents"],
+      ["p", terminalHint()],
+    ]);
+    card.dataset.cmd = name;
+    return;
+  }
+  localCard([
+    ["p", `/${name}: Claude Code's slash commands aren't available in fethr's panel.`],
+    ["p", terminalHint()],
+  ]).dataset.cmd = name;
+}
+
 inputEl.addEventListener("keydown", (e) => {
   if (mentionMenu.classList.contains("open")) {
-    if (e.key === "Escape") {
+    if (e.key === "Escape" && claimEsc(e)) {
       hideMentionMenu();
       e.preventDefault();
       return;
@@ -893,6 +1394,7 @@ inputEl.addEventListener("keydown", (e) => {
     const t = inputEl.value.trim();
     if (!t || streaming) return;
     inputEl.value = "";
+    if (SLASH_RE.test(t)) return slashCommand(t);
     askAgent(t);
   }
 });
@@ -904,21 +1406,37 @@ f("/api/alive", { method: "POST" }).catch(() => {});
 
 boot();
 
+// ---- home button: back to (or open) the home window ----
+$("#go-home").onclick = async () => {
+  try {
+    const r = await f("/api/open", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ home: true }),
+    });
+    const data = await r.json().catch(() => ({}));
+    setStatus(r.ok && data.ok ? "opening home…" : `couldn't open home: ${data.error || r.status}`);
+  } catch {
+    setStatus("couldn't open home: server not answering");
+  }
+  setTimeout(() => setStatus(""), 3000);
+};
+
 // ---- update check (web/update.js) ----
 // Off switch in the footer; the daily fetch is the editor's only network
 // call on its own. The notice names the version and links to where it is.
 try {
-  $("#updatecheck").checked = isEnabled(localStorage);
+  $("#updatecheck").checked = isEnabled(prefs);
 } catch { /* ignore */ }
 $("#updatecheck").onchange = () => {
   try {
-    localStorage.setItem(ENABLED_KEY, $("#updatecheck").checked ? "1" : "0");
+    prefs.setItem(ENABLED_KEY, $("#updatecheck").checked ? "1" : "0");
   } catch { /* ignore */ }
 };
 
 async function checkForUpdate(meta) {
-  if (!meta.version || !isEnabled(localStorage)) return;
-  const manifest = await fetchManifest(localStorage);
+  if (!meta.version || !isEnabled(prefs)) return;
+  const manifest = await fetchManifest(prefs);
   if (!manifest) return;
   const state = decide(manifest, meta.version, meta.channel);
   if (state.kind === "current") return;
@@ -958,7 +1476,7 @@ async function checkForUpdate(meta) {
     row.append(sw, text);
     row.onclick = () => {
       themeId = t.id;
-      saveTheme(localStorage, themeId);
+      saveTheme(prefs, themeId);
       applyTheme();
       closeViewMenu();
     };
@@ -981,6 +1499,6 @@ async function checkForUpdate(meta) {
     if (menu.classList.contains("open") && !menu.contains(e.target)) closeViewMenu();
   });
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && menu.classList.contains("open")) { closeViewMenu(); $("#toggle-view").focus(); }
+    if (e.key === "Escape" && menu.classList.contains("open") && claimEsc(e)) { closeViewMenu(); $("#toggle-view").focus(); }
   });
 }

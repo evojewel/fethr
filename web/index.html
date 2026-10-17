@@ -11,29 +11,43 @@
     --bg: #101312; --panel: #161a18; --ink: #e8ece9; --muted: #8fa098;
     --accent: #6fd3b2; --rule: #242a27;
     --add: #7fd0a0; --del: #d08080;
+    --warn: #e0b04a; /* full agent mode: tools run without asking */
+    --hue-s: 35%; --hue-l: 55%; /* per-project stripe (home), hue from the path */
+    color-scheme: dark;
     --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
     --accent-line: color-mix(in srgb, var(--accent) 35%, transparent);
     --shadow: rgba(0,0,0,.35);
   }
   :root[data-theme="paper"] {
     --bg: #f5f8f6; --panel: #ffffff; --ink: #17211d; --muted: #5c6d64;
-    --accent: #0e7a58; --rule: #d8e1dc; --add: #1f7a45; --del: #b23a3a; --shadow: rgba(23,33,29,.18);
+    --accent: #0e7a58; --rule: #d8e1dc; --add: #1f7a45; --del: #b23a3a; --shadow: rgba(23,33,29,.18); --warn: #a86400;
+    --hue-l: 42%; color-scheme: light;
   }
   @media (prefers-color-scheme: light) {
     :root:not([data-theme]), :root[data-theme="auto"] {
       --bg: #f5f8f6; --panel: #ffffff; --ink: #17211d; --muted: #5c6d64;
-      --accent: #0e7a58; --rule: #d8e1dc; --add: #1f7a45; --del: #b23a3a; --shadow: rgba(23,33,29,.18);
+      --accent: #0e7a58; --rule: #d8e1dc; --add: #1f7a45; --del: #b23a3a; --shadow: rgba(23,33,29,.18); --warn: #a86400;
+      --hue-l: 42%; color-scheme: light;
     }
   }
   :root[data-theme="slate"] {
     --bg: #14181d; --panel: #1b2027; --ink: #e6eaef; --muted: #93a0ae;
-    --accent: #86adde; --rule: #262c34; --add: #8fc7a4; --del: #d98b8b; --shadow: rgba(0,0,0,.4);
+    --accent: #86adde; --rule: #262c34; --add: #8fc7a4; --del: #d98b8b; --shadow: rgba(0,0,0,.4); --warn: #e0b04a;
+    color-scheme: dark;
   }
   :root[data-theme="dawn"] {
     --bg: #f7f3ea; --panel: #fffdf8; --ink: #2a2419; --muted: #6e6147;
-    --accent: #8a6a1f; --rule: #e3dbc8; --add: #3e7a3a; --del: #a83d2f; --shadow: rgba(43,36,25,.18);
+    --accent: #8a6a1f; --rule: #e3dbc8; --add: #3e7a3a; --del: #a83d2f; --shadow: rgba(43,36,25,.18); --warn: #b4560f;
+    --hue-l: 42%; color-scheme: light;
   }
   * { box-sizing: border-box; }
+  /* native-app habits: no rubber-band, and chrome isn't selectable text;
+     the transcript, the editor and form fields are */
+  html, body { overscroll-behavior: none; }
+  body { -webkit-user-select: none; user-select: none; }
+  #chat, #editor, input, textarea, .home-viewer .vbody, #home-status {
+    -webkit-user-select: text; user-select: text;
+  }
   :root { --sidebar-w: 220px; --agent-w: 0px; --agent-resizer-w: 0px; }
   body {
     margin: 0; height: 100vh; display: grid;
@@ -89,7 +103,20 @@
   #tree .file-row.active { background: var(--rule); color: var(--accent); }
   #tree .children { display: flex; flex-direction: column; }
   #tree .children.collapsed { display: none; }
-  #editor { grid-column: 3; overflow: hidden; }
+  #editor { grid-column: 3; overflow: hidden; position: relative; }
+  #disk-banner {
+    position: absolute; top: 0; left: 0; right: 0; z-index: 4;
+    display: flex; align-items: center; gap: 10px; padding: 5px 12px; font-size: 12px;
+    background: var(--panel); color: var(--ink); border-bottom: 1px solid var(--warn);
+    box-shadow: 0 2px 8px var(--shadow);
+  }
+  #disk-banner[hidden] { display: none; }
+  #disk-banner span { margin-right: auto; }
+  #disk-banner button {
+    font: inherit; font-size: 12px; cursor: pointer; border-radius: 5px; padding: 1px 10px;
+    background: none; color: var(--ink); border: 1px solid var(--rule);
+  }
+  #disk-banner #disk-reload { border-color: var(--accent-line); color: var(--accent); }
   #editor .cm-editor { height: 100%; font-size: 13px; }
   #editor .cm-scroller { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
   footer {
@@ -174,7 +201,24 @@
     border-radius: 5px; padding: 0 10px; font-size: 11.5px; cursor: pointer;
   }
   #agent-status button:hover { color: var(--del); border-color: var(--del); }
-  #agent h2 { display: flex; align-items: center; gap: 8px; }
+  #agent h2 { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  /* agent mode: a two-state segmented control */
+  #mode { display: inline-flex; border: 1px solid var(--rule); border-radius: 6px; overflow: hidden; }
+  #mode button {
+    font: inherit; font-size: 11.5px; font-weight: 400; padding: 1px 8px; cursor: pointer;
+    background: none; border: none; color: var(--muted);
+  }
+  #mode button + button { border-left: 1px solid var(--rule); }
+  #mode button[aria-checked="true"] { background: var(--accent-soft); color: var(--accent); }
+  #mode button[data-mode="full"][aria-checked="true"] {
+    background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn);
+  }
+  #mode-note {
+    padding: 4px 12px; font-size: 11.5px; color: var(--warn);
+    background: color-mix(in srgb, var(--warn) 10%, transparent); border-bottom: 1px solid var(--rule);
+  }
+  #mode-note[hidden] { display: none; }
+  body.agent-full #agent h2 { box-shadow: inset 0 2px 0 var(--warn); }
   #agent h2 select {
     margin-left: auto; background: var(--bg); color: var(--muted);
     border: 1px solid var(--rule); border-radius: 5px; font-size: 11.5px; padding: 1px 4px;
@@ -185,6 +229,96 @@
   }
   #agent h2 label input { accent-color: var(--accent); cursor: pointer; }
   .msg.tool.auto-note { color: var(--accent); }
+  #agent-title {
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-weight: 400; color: var(--muted); font-size: 12px;
+  }
+  .msg.no-reply { color: var(--muted); font-style: italic; }
+  .msg.local-card {
+    white-space: normal; border: 1px solid var(--rule); border-radius: 8px; padding: 8px 12px;
+    background: var(--bg); font-size: 12.5px;
+  }
+  .msg.local-card b { display: block; margin: 6px 0 2px; color: var(--ink); }
+  .msg.local-card b:first-child { margin-top: 0; }
+  .msg.local-card li { margin-left: 16px; color: var(--ink); }
+  .msg.local-card p { margin: 8px 0 0; color: var(--muted); }
+  .msg.local-card p:first-child { margin-top: 0; color: var(--ink); }
+  /* agent-only: files (sidebar + editor) hidden, the conversation takes the
+     window in a centred reading column. Visibility and track list only; the
+     width variables stay JS-owned (ARCHITECTURE.md, the cascade trap). */
+  body.files-hidden { grid-template-columns: minmax(0, 1fr); }
+  body.files-hidden > aside:not(#agent), body.files-hidden > .resizer, body.files-hidden > #editor { display: none; }
+  body.files-hidden #agent { grid-column: 1; grid-row: 1; border-left: none; }
+  body.files-hidden footer { grid-column: 1; }
+  /* reading: a ~72ch measure at 15px/1.6. ch follows each element's own font
+     size, so the 13px header uses 83ch and the 11.5px note 94ch for the same
+     column edge. */
+  body.files-hidden #chat-wrap, body.files-hidden #composer { font-size: 15px; }
+  body.files-hidden #chat { padding-inline: max(16px, calc((100% - 72ch) / 2)); }
+  body.files-hidden #composer { padding-inline: max(16px, calc((100% - 72ch) / 2)); }
+  body.files-hidden #agent h2 { padding-inline: max(12px, calc((100% - 83ch) / 2)); }
+  body.files-hidden #mode-note { padding-inline: max(12px, calc((100% - 94ch) / 2)); }
+  body.files-hidden .msg { line-height: 1.6; }
+  body.files-hidden .msg.tool { font-size: 13px; }
+  body.files-hidden .msg.user {
+    color: var(--ink); background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent);
+    border-radius: 6px; padding: 8px 12px;
+  }
+  #focus-btn {
+    display: none; font: inherit; font-size: 11.5px; font-weight: 400; cursor: pointer;
+    background: none; border: 1px solid var(--rule); border-radius: 5px; padding: 0 8px; color: var(--muted);
+  }
+  body.files-hidden #focus-btn { display: inline-block; }
+  /* focus: transcript + composer only */
+  body.focus-mode footer, body.focus-mode #agent h2, body.focus-mode #mode-note, body.focus-mode #turns { display: none !important; }
+  body.focus-mode #agent { grid-row: 1 / 3; }
+  /* Focus hides the header that carries full mode's amber accent; keep the
+     signal on the window edge, since tools here run without asking. */
+  body.focus-mode.agent-full #agent { box-shadow: inset 0 3px 0 var(--warn); }
+  #exit-focus {
+    position: fixed; top: calc(10px + env(safe-area-inset-top, 0px)); right: 12px; z-index: 8;
+    font: inherit; font-size: 12px; cursor: pointer; padding: 3px 10px; border-radius: 6px;
+    background: var(--panel); color: var(--ink); border: 1px solid var(--rule);
+    opacity: .35; transition: opacity .15s ease;
+  }
+  #exit-focus:hover, #exit-focus:focus-visible { opacity: 1; }
+  #exit-focus[hidden] { display: none; }
+  /* transcript wrapper: the Latest pill and the turn list sit over it */
+  #chat-wrap { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; }
+  #chat-wrap #chat { flex: 1; }
+  #latest {
+    position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); z-index: 3;
+    font: inherit; font-size: 12px; cursor: pointer; padding: 3px 12px; border-radius: 99px;
+    background: var(--panel); color: var(--accent); border: 1px solid var(--accent-line); box-shadow: 0 2px 10px var(--shadow);
+  }
+  #latest[hidden] { display: none; }
+  #turns { display: none; }
+  @media (min-width: 1100px) {
+    body.files-hidden #turns:not(:empty) {
+      display: flex; flex-direction: column; gap: 2px; position: absolute; z-index: 2;
+      top: 12px; bottom: 12px; left: 16px; width: min(240px, calc((100% - 640px) / 2 - 32px));
+      overflow-y: auto; font-size: 12px;
+    }
+  }
+  #turns button {
+    display: flex; gap: 8px; align-items: flex-start; text-align: left; width: 100%;
+    font: inherit; color: var(--muted); background: none; border: none; border-radius: 6px; padding: 4px 6px; cursor: pointer;
+  }
+  #turns button:hover, #turns button:focus-visible { background: var(--rule); color: var(--ink); outline: none; }
+  #turns .n { font-family: ui-monospace, Menlo, monospace; font-variant-numeric: tabular-nums; min-width: 2ch; text-align: right; opacity: .8; }
+  #turns .t { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.35; }
+  /* block markdown inside messages */
+  .msg h3, .msg h4, .msg h5 { margin: 10px 0 2px; line-height: 1.3; color: var(--ink); }
+  .msg h3 { font-size: 1.15em; } .msg h4 { font-size: 1.05em; } .msg h5 { font-size: 1em; }
+  .msg ul, .msg ol { margin: 4px 0; padding-left: 22px; }
+  .msg blockquote { margin: 4px 0; padding-left: 10px; border-left: 2px solid var(--rule); color: var(--muted); }
+  footer #toggle-files[aria-pressed="false"] { color: var(--muted); border-style: dashed; }
+  .msg .fork-offer { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-style: normal; }
+  .msg .fork-offer button {
+    border: 1px solid var(--accent); background: var(--accent-soft); color: var(--accent);
+    border-radius: 5px; padding: 2px 12px; font: inherit; font-size: 12px; cursor: pointer;
+  }
+  .msg .fork-offer button:disabled { opacity: .5; cursor: default; }
   #composer { border-top: 1px solid var(--rule); padding: 8px; position: relative; }
   #ctx-bar { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 6px; min-height: 0; }
   .ctx-pill {
@@ -245,20 +379,221 @@
   #viewmenu .sw.auto { background: linear-gradient(90deg, #101312 50%, #f5f8f6 50%); }
   #viewmenu .name { font-size: 12.5px; }
   #viewmenu .note { font-size: 11px; color: var(--muted); display: block; }
+
+  /* Until boot() knows the mode, show nothing, so a home window never flashes
+     the editor. The animation is the fallback: if the script never runs, the
+     page still appears. */
+  body.booting > * { opacity: 0; animation: fethr-reveal 0s 1.5s forwards; }
+  @keyframes fethr-reveal { to { opacity: 1; } }
+
+  /* ---- home view (web/home.js) ----
+     body.home-mode swaps the editor grid for one column. Only display and
+     overflow change here; the grid's width variables stay JS-owned
+     (ARCHITECTURE.md, the custom-property cascade trap). */
+  #home { display: none; }
+  #home [hidden] { display: none !important; }
+  body.home-mode { display: block; overflow: auto; }
+  body.home-mode > :not(#home) { display: none !important; }
+  body.home-mode #home {
+    display: flex; flex-direction: column; height: 100vh;
+    max-width: 1180px; margin: 0 auto; padding: 22px 28px 18px;
+  }
+  .home-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 18px; min-height: 22px; }
+  .home-title { margin: 0; color: var(--ink); font-weight: 600; font-size: 21px; letter-spacing: -0.01em; line-height: 1.2; }
+  .home-status { color: var(--muted); font-size: 12px; }
+  .home-status.error { color: var(--del); }
+  .home-cols {
+    flex: 1; min-height: 0; display: grid; gap: 22px;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.7fr);
+  }
+  .home-sec {
+    display: flex; flex-direction: column; min-height: 0;
+    background: var(--panel); border: 1px solid var(--rule); border-radius: 10px; padding: 16px 16px 8px;
+  }
+  /* section labels: sentence case, quiet */
+  .home-sec h2, .home-sec h3 { margin: 0 0 10px; font-size: 12px; font-weight: 600; color: var(--muted); }
+  .home-sec h3 { margin-top: 18px; margin-bottom: 6px; }
+  .home-sub { margin: -4px 0 10px; font-size: 12px; color: var(--muted); }
+  .home-list .empty kbd { margin: 0 2px; }
+  /* per-project hue: a 3px rounded stripe at the row's left edge */
+  .home-list .row.hued { position: relative; padding-left: 16px; }
+  .home-list .row.hued::before {
+    content: ""; position: absolute; left: 5px; top: 9px; bottom: 9px; width: 3px; border-radius: 3px;
+    background: hsl(var(--hue), var(--hue-s), var(--hue-l));
+  }
+  .home-list .row.gone.hued::before { opacity: .4; }
+  .home-list .rbtns.quiet { opacity: 0; }
+  .home-list .row:hover .rbtns.quiet, .home-list .row:focus-within .rbtns.quiet, .home-list .rbtns.quiet.confirming { opacity: 1; }
+  .home-hidden { margin-top: 6px; }
+  .home-disclose {
+    background: none; border: none; padding: 2px 0; font: inherit; font-size: 11.5px; color: var(--muted); cursor: pointer;
+  }
+  .home-disclose:hover { color: var(--ink); }
+  .home-disclose::before { content: "▸ "; font-size: 9px; }
+  .home-disclose[aria-expanded="true"]::before { content: "▾ "; }
+  #home-recent-hidden { flex: none; margin-top: 2px; }
+  #home-recent-hidden .row { cursor: default; opacity: .75; }
+  .home-btn {
+    background: none; border: 1px solid var(--rule); color: var(--ink); font: inherit;
+    border-radius: 6px; padding: 5px 12px; cursor: pointer;
+  }
+  .home-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  .home-btn.primary { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
+  .home-btn.primary:hover:not(:disabled) { border-color: var(--accent); }
+  .home-btn:disabled { opacity: .4; cursor: default; }
+  .home-btn.small { padding: 2px 10px; font-size: 12px; }
+  #home-pick { align-self: flex-start; display: inline-flex; align-items: center; gap: 10px; padding: 7px 14px; }
+  #home kbd {
+    font-family: ui-monospace, Menlo, monospace; font-size: 10.5px; color: var(--muted);
+    border: 1px solid var(--rule); border-radius: 4px; padding: 0 5px; line-height: 1.5;
+  }
+  .home-path { display: flex; gap: 6px; margin-top: 10px; }
+  .home-path input, .home-search {
+    flex: 1; min-width: 0; background: var(--bg); color: var(--ink); font: inherit;
+    border: 1px solid var(--rule); border-radius: 6px; padding: 5px 9px;
+  }
+  .home-path input { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+  .home-path input:focus, .home-search:focus { outline: none; border-color: var(--accent); }
+  .home-searchwrap { position: relative; display: flex; }
+  .home-searchwrap .home-slash { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); pointer-events: none; }
+  .home-search:focus + .home-slash, .home-search:not(:placeholder-shown) + .home-slash { display: none; }
+  .home-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 10px 0 6px; }
+  .home-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 11.5px;
+    background: none; color: var(--muted); border: 1px solid var(--rule); border-radius: 99px;
+    padding: 1px 10px; cursor: pointer;
+  }
+  .chip .n { opacity: .7; font-variant-numeric: tabular-nums; }
+  .chip:hover { color: var(--ink); }
+  .chip[aria-checked="true"] { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-line); }
+  .home-temp {
+    margin-left: auto; display: flex; align-items: center; gap: 5px;
+    font-size: 11.5px; color: var(--muted); cursor: pointer; user-select: none;
+  }
+  .home-temp input { accent-color: var(--accent); cursor: pointer; margin: 0; }
+  .home-list { list-style: none; margin: 0 -8px; padding: 0; overflow-y: auto; flex: 1; min-height: 0; }
+  .home-list .row {
+    display: flex; align-items: center; gap: 12px; padding: 7px 8px; border-radius: 6px; cursor: pointer;
+  }
+  .home-list .row:hover { background: color-mix(in srgb, var(--rule) 60%, transparent); }
+  .home-list .row:focus { outline: none; }
+  .home-list .row:focus-visible, .home-list .row:focus-within { background: color-mix(in srgb, var(--rule) 70%, transparent); }
+  .home-list .row:focus-visible { box-shadow: inset 2px 0 0 var(--accent); }
+  .home-list .rmain { flex: 1; min-width: 0; }
+  .home-list .rtitle { display: flex; align-items: center; gap: 7px; color: var(--ink); }
+  .home-list .rtitle, .home-list .ttext, .home-list .rmeta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .home-list .rmeta { color: var(--muted); font-size: 11.5px; margin-top: 2px; }
+  .home-list .folder .rmeta { font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
+  .home-list .rwhen { color: var(--muted); font-size: 11.5px; flex: none; font-variant-numeric: tabular-nums; }
+  .home-list .rbtns { display: flex; gap: 6px; flex: none; opacity: .55; }
+  .home-list .row:hover .rbtns, .home-list .row:focus-within .rbtns { opacity: 1; }
+  .home-list .rbtns.confirming { opacity: 1; align-items: center; }
+  .home-list .rbtns .confirm-q { font-size: 12px; color: var(--ink); white-space: nowrap; }
+  .home-list .session .rmeta, .home-list .subrow .rmeta { display: flex; align-items: baseline; min-width: 0; }
+  .home-list .rmeta .tag { margin-left: 6px; flex: none; }
+  .home-list .rmeta > * { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .home-list .rmeta .rwhere { flex: 0 1 auto; }
+  .home-list .rmeta .rage { flex: 0 1 auto; font-variant-numeric: tabular-nums; }
+  .home-list .rmeta .rwhere:not(:empty) + .rage:not(:empty)::before,
+  .home-list .rmeta .tag + .rage:not(:empty)::before,
+  .home-list .rmeta.dots > :not(:first-child):not(:empty)::before { content: "\00a0·\00a0"; }
+  .home-list .rmeta .sid { font-family: ui-monospace, Menlo, monospace; font-size: 10.5px; flex: none; }
+  .home-list .rmeta .cont { flex: none; }
+  /* a session row the Recent list just pointed at */
+  .home-list .row.flash { animation: fethr-flash 1.6s ease-out; }
+  @keyframes fethr-flash { 0%, 35% { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); } }
+  @media (prefers-reduced-motion: reduce) {
+    .home-list .row.flash { animation: none; background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
+  }
+  .home-status .confirm-broad {
+    margin-left: 6px; font: inherit; font-size: 12px; cursor: pointer; border-radius: 5px; padding: 1px 10px;
+    border: 1px solid var(--accent-line); background: var(--accent-soft); color: var(--accent);
+  }
+  /* state chips: something happening now. Closed sessions have none. */
+  .state {
+    flex: none; display: inline-flex; align-items: center; gap: 4px;
+    font-size: 10px; line-height: 1.5; padding: 0 6px; border-radius: 99px;
+    color: var(--muted); border: 1px solid var(--rule);
+  }
+  .state .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: pulse 1.6s ease-in-out infinite; }
+  @media (prefers-reduced-motion: reduce) { .state .dot { animation: none; } }
+  .state-busy, .state-active { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); }
+  .state-open, .state-background { color: var(--accent); border-color: var(--accent-line); }
+  .state-failed { color: var(--del); border-color: color-mix(in srgb, var(--del) 40%, transparent); }
+  /* killed / stopped: an end like "failed", but often on purpose, so no alarm colour */
+  .state-killed, .state-stopped { color: var(--ink); border-color: var(--muted); }
+  .tag {
+    font-family: ui-monospace, Menlo, monospace; font-size: 10.5px; color: var(--muted);
+    background: var(--bg); border: 1px solid var(--rule); border-radius: 4px; padding: 0 5px;
+  }
+  .subtoggle {
+    display: inline-flex; align-items: center; gap: 4px; margin-top: 3px; padding: 0 4px 0 0;
+    background: none; border: none; font: inherit; font-size: 11.5px; color: var(--muted); cursor: pointer;
+  }
+  .subtoggle:hover { color: var(--accent); }
+  .subtoggle .chev { width: 10px; font-size: 9px; }
+  .home-list .subwrap { list-style: none; margin: 0 0 4px 16px; padding-left: 8px; border-left: 1px solid var(--rule); }
+  .home-list .subs { list-style: none; margin: 0; padding: 0; }
+  .home-list .subrow { padding: 4px 8px; }
+  .home-list .subrow .rtitle { font-size: 12.5px; }
+  /* read-only subagent transcript: a drawer over the home view */
+  .home-viewer {
+    position: fixed; inset: 0; z-index: 10; display: flex; justify-content: flex-end;
+    background: color-mix(in srgb, var(--bg) 55%, transparent);
+  }
+  .home-viewer .vpanel {
+    width: min(680px, 100%); height: 100%; display: flex; flex-direction: column;
+    background: var(--panel); border-left: 1px solid var(--rule); box-shadow: -8px 0 28px var(--shadow);
+  }
+  .home-viewer .vhead {
+    display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--rule);
+  }
+  .home-viewer .vtitlebox { flex: 1; min-width: 0; }
+  .home-viewer .vtitle { margin: 0 0 4px; font-size: 13px; font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
+  .home-viewer .vmeta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 11.5px; color: var(--muted); }
+  .home-viewer .vmeta .ro { text-transform: uppercase; letter-spacing: .06em; font-size: 10px; }
+  .home-viewer .vbody { flex: 1; overflow-y: auto; padding: 12px 16px; }
+  .home-list .row.gone { cursor: default; }
+  .home-list .row.gone .rtitle, .home-list .row.gone .rmeta, .home-list .row.gone .rwhen { opacity: .45; }
+  .home-list .row.gone:hover { background: none; }
+  .home-list .empty { padding: 10px 8px; color: var(--muted); font-size: 12px; }
+  @media (max-width: 760px) {
+    body.home-mode #home { height: auto; min-height: 100vh; padding: 16px; }
+    .home-cols { grid-template-columns: minmax(0, 1fr); flex: none; }
+    .home-list { max-height: none; overflow: visible; }
+    .home-list .rbtns { opacity: 1; }
+    .home-list .row.session { flex-wrap: wrap; row-gap: 6px; }
+    .home-list .row.session .rmain { flex-basis: 100%; }
+    .home-list .row.session .rbtns { margin-left: auto; }
+  }
 </style>
 </head>
-<body>
+<body class="booting">
 <aside>
   <h1><span class="label">fethr<small id="root"></small><small id="branch"></small></span><button id="toggle-sidebar" title="Collapse sidebar (⌘B)">‹</button></h1>
   <div id="tree"></div>
 </aside>
 <div class="resizer sidebar" id="resize-sidebar" title="Drag to resize"></div>
-<div id="editor"></div>
+<div id="editor">
+  <div id="disk-banner" role="alert" hidden>
+    <span>Changed on disk by the agent</span>
+    <button type="button" id="disk-reload">Reload</button>
+    <button type="button" id="disk-keep">Keep mine</button>
+  </div>
+</div>
 <div class="resizer agent" id="resize-agent" title="Drag to resize"></div>
 <aside id="agent">
-  <h2>agent
+  <h2>agent<span id="agent-title"></span>
+    <button type="button" id="focus-btn" title="Focus: only the conversation (⌘⇧F, Esc to leave)">focus</button>
+    <span id="mode" role="radiogroup" aria-label="Agent mode">
+      <button type="button" role="radio" data-mode="readonly" aria-checked="true"
+        title="Reads the workspace; edits arrive as proposals you accept">read-only</button>
+      <button type="button" role="radio" data-mode="full" aria-checked="false"
+        title="Full Claude Code in auto mode: tools run without asking; a classifier may block risky actions">full</button>
+    </span>
     <label title="Auto-apply proposals into the editor (still needs ⌘S to save)">
-      <input type="checkbox" id="auto"> auto
+      <input type="checkbox" id="auto"> auto-apply
     </label>
     <select id="model" title="Model (changing starts a new conversation)">
       <option value="">default</option>
@@ -268,7 +603,12 @@
       <option value="fable">fable 5</option>
     </select>
   </h2>
-  <div id="chat"></div>
+  <div id="mode-note" hidden>Full Claude Code — tools run without asking (auto mode)</div>
+  <div id="chat-wrap">
+    <nav id="turns" aria-label="Your prompts in this conversation"></nav>
+    <div id="chat"></div>
+    <button type="button" id="latest" hidden>Latest ↓</button>
+  </div>
   <div id="agent-status"><span class="pulse"></span><span id="phase">thinking…</span><button id="stop">stop</button></div>
   <div id="composer">
     <div id="ctx-bar"></div>
@@ -277,7 +617,7 @@
       <textarea id="input" placeholder="Ask about this project… (Enter sends, Shift-Enter newlines, @ to attach a file)"></textarea>
       <button id="mic" type="button" title="Voice input">🎙</button>
     </div>
-    <div class="note">Reads the workspace; edits arrive as proposals you accept. Uses your Claude Code login.</div>
+    <div class="note" id="composer-note">Reads the workspace; edits arrive as proposals you accept. Uses your Claude Code login.</div>
   </div>
 </aside>
 <footer>
@@ -291,9 +631,13 @@
     <input type="checkbox" id="updatecheck" checked> updates
   </label>
   <button id="toggle-view" title="Theme" aria-haspopup="menu" aria-expanded="false">view</button>
+  <button id="toggle-files" title="Show or hide files and the editor (⌘E)" aria-pressed="true">files</button>
   <button id="toggle-agent" title="⌘J">agent</button>
+  <button id="go-home" title="Open the home window: folders and past sessions">home</button>
 </footer>
 <div id="viewmenu" role="menu" aria-label="Theme"></div>
+<button type="button" id="exit-focus" hidden title="Leave focus (Esc)">exit focus</button>
+<main id="home" hidden></main>
 <script type="module" src="/editor.js"></script>
 </body>
 </html>

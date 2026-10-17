@@ -566,7 +566,8 @@ export function serve(root, onReady, opts = {}) {
       readJsonBody(req, MAX_OPEN_BODY).then(async (body) => {
         if (!body || typeof body.id !== "string" || typeof body.allow !== "boolean") return sendJson(res, 400, { error: "bad request" });
         const m = await import("./agent.js");
-        return m.settleAsk(body.id, body.allow) ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: "no such question (already answered, or the run ended)" });
+        const answers = body.answers && typeof body.answers === "object" ? body.answers : undefined;
+        return m.settleAsk(body.id, body.allow, answers) ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: "no such question (already answered, or the run ended)" });
       }).catch((e) => sendJson(res, 500, { error: String(e.message || e) }));
       return;
     }

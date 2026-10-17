@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { runAgent, fethrContext, ALLOWED_TOOLS, DISALLOWED_TOOLS, MODE_OPTIONS, editorSync, checkImages, handleAgent, MAX_IMAGES, askInPanel, settleAsk } from "../src/agent.js";
+import { runAgent, fethrContext, ALLOWED_TOOLS, DISALLOWED_TOOLS, MODE_OPTIONS, editorSync, checkImages, handleAgent, MAX_IMAGES, askInPanel, settleAsk, cleanAnswers } from "../src/agent.js";
 import { EventEmitter } from "node:events";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "fethr-agent-"));
@@ -288,7 +288,11 @@ test("permission questions: full mode asks the panel and waits; read-only never 
   assert.ok(!("permissionMode" in full.calls[0].options) || full.calls[0].options.permissionMode === "auto", "still auto mode, never bypass");
   const ro = fakeQuery([{ type: "result", subtype: "success", result: "ok" }]);
   await runAgent(os.tmpdir(), { prompt: "x" }, fakeRes(), { queryFn: ro.queryFn });
-  assert.equal(ro.calls[0].options.canUseTool, undefined);
+  // read-only: questions may reach the panel, every other tool is refused outright
+  const roAsk = ro.calls[0].options.canUseTool;
+  assert.equal(typeof roAsk, "function");
+  assert.equal((await roAsk("Bash", { command: "ls" }, {})).behavior, "deny");
+  assert.equal((await roAsk("Write", { file_path: "/x" }, {})).behavior, "deny");
 
   const listeners = {};
   const res = Object.assign(fakeRes(), { on: (ev, fn) => { listeners[ev] = fn; } });
@@ -320,4 +324,32 @@ test("permission questions: full mode asks the panel and waits; read-only never 
   listeners.close();
   assert.equal((await p4).behavior, "deny");
   assert.equal(settleAsk("not-an-id", true), false);
+});
+
+test("choice questions: shown as options, answered with the chosen labels", async () => {
+  const listeners = {};
+  const res = Object.assign(fakeRes(), { on: (ev, fn) => { listeners[ev] = fn; } });
+  const ask = askInPanel(res, { onlyQuestions: true });
+  const input = { questions: [
+    { question: "Enable hot reloading?", header: "Mods", multiSelect: false,
+      options: [{ label: "Enable for this session", description: "" }, { label: "Not now", description: "x" }] },
+    { question: "Which tools?", header: "Tools", multiSelect: true,
+      options: [{ label: "Bash", description: "" }, { label: "Edit", description: "" }] },
+  ] };
+  const p = ask("AskUserQuestion", input, {});
+  const ev = res.events.find((e) => e.type === "question");
+  assert.ok(ev && !res.events.some((e) => e.type === "permission"), "a question event, not Approve / Deny");
+  assert.deepEqual(ev.questions.map((q) => [q.question, q.multiSelect, q.options.map((o) => o.label)]),
+    [["Enable hot reloading?", false, ["Enable for this session", "Not now"]], ["Which tools?", true, ["Bash", "Edit"]]]);
+  settleAsk(ev.id, true, { "Enable hot reloading?": "Enable for this session", "Which tools?": "Bash, Edit", "Not asked": "x", "Which tools? ": 5 });
+  const r = await p;
+  assert.equal(r.behavior, "allow");
+  assert.deepEqual(r.updatedInput.answers, { "Enable hot reloading?": "Enable for this session", "Which tools?": "Bash, Edit" });
+  assert.deepEqual(r.updatedInput.questions, input.questions, "the questions themselves are passed back unchanged");
+
+  // dismissing tells the agent no answer was given
+  const p2 = ask("AskUserQuestion", input, {});
+  settleAsk(res.events.filter((e) => e.type === "question")[1].id, false);
+  assert.match((await p2).message, /dismissed/);
+  assert.deepEqual(cleanAnswers({ questions: [] }, { a: "b" }), {});
 });

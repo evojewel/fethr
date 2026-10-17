@@ -113,6 +113,8 @@ export function fethrContext(resumed, mode = "readonly") {
     ? [
         "You are in fethr's agent panel in full mode: Claude Code's tools are available and run without asking; " +
           "an auto-mode classifier may block risky actions. The user sees your edits in their editor.",
+        "Claude Code's terminal-only features (slash commands, mods and plugin panes, hot reload) don't exist in fethr's panel. " +
+          "Don't start `claude` from Bash to reach them; tell the user to use them in a Claude Code terminal session instead.",
       ]
     : [
         "You are in fethr's agent panel.",
@@ -306,30 +308,71 @@ function askDetail(name, input) {
   return String(d || "").slice(0, MAX_ASK_DETAIL);
 }
 
-export function askInPanel(res) {
+// Claude Code's multiple-choice question tool. Its answers travel back in the
+// tool's own input (`answers`, question text -> chosen label, multi-select
+// labels comma-joined), so returning the input unchanged answered nothing.
+const QUESTION_TOOL = "AskUserQuestion";
+const MAX_QUESTIONS = 4, MAX_OPTIONS = 6, MAX_Q_TEXT = 600;
+const clip = (v, n) => String(v ?? "").slice(0, n);
+
+// What the page needs to draw the questions: text only, capped.
+function questionView(input) {
+  const qs = Array.isArray(input && input.questions) ? input.questions.slice(0, MAX_QUESTIONS) : [];
+  return qs.map((q) => ({
+    question: clip(q && q.question, MAX_Q_TEXT),
+    header: clip(q && q.header, 40),
+    multiSelect: !!(q && q.multiSelect),
+    options: (Array.isArray(q && q.options) ? q.options.slice(0, MAX_OPTIONS) : [])
+      .map((o) => ({ label: clip(o && o.label, 200), description: clip(o && o.description, MAX_Q_TEXT) })),
+  }));
+}
+
+// Keeps only answers to questions that were asked, as strings.
+export function cleanAnswers(input, answers) {
+  const asked = new Set(questionView(input).map((q) => q.question));
+  const out = {};
+  if (answers && typeof answers === "object") {
+    for (const [k, v] of Object.entries(answers)) {
+      if (asked.has(k) && typeof v === "string" && v.trim()) out[k] = clip(v.trim(), 2000);
+    }
+  }
+  return out;
+}
+
+// onlyQuestions: read-only mode. Asking the user something is harmless, so
+// its questions still reach the panel; every other tool stays refused there.
+export function askInPanel(res, { onlyQuestions = false } = {}) {
   const open = new Set();
   res.on("close", () => { for (const id of open) settleAsk(id, false); });
   return (toolName, input, { signal } = {}) => new Promise((resolve) => {
+    const isQuestion = toolName === QUESTION_TOOL;
+    if (onlyQuestions && !isQuestion) {
+      return resolve({ behavior: "deny", message: "Not available in read-only mode." });
+    }
     const id = crypto.randomUUID();
-    const done = (allow) => {
+    const done = (allow, answers) => {
       open.delete(id);
       pendingAsks.delete(id);
-      resolve(allow
-        ? { behavior: "allow", updatedInput: input }
-        : { behavior: "deny", message: "The user denied this in fethr's panel." });
+      if (!allow) {
+        return resolve({ behavior: "deny", message: isQuestion
+          ? "The user dismissed the question without answering."
+          : "The user denied this in fethr's panel." });
+      }
+      resolve({ behavior: "allow", updatedInput: isQuestion ? { ...input, answers: cleanAnswers(input, answers) } : input });
     };
     pendingAsks.set(id, done);
     open.add(id);
     if (signal) signal.addEventListener("abort", () => settleAsk(id, false), { once: true });
-    emit(res, { type: "permission", id, name: String(toolName).replace(/^mcp__fethr__/, ""), detail: askDetail(toolName, input) });
+    if (isQuestion) emit(res, { type: "question", id, questions: questionView(input) });
+    else emit(res, { type: "permission", id, name: String(toolName).replace(/^mcp__fethr__/, ""), detail: askDetail(toolName, input) });
   });
 }
 
 // Answers one open question. Returns false for an unknown or settled id.
-export function settleAsk(id, allow) {
+export function settleAsk(id, allow, answers) {
   const done = pendingAsks.get(id);
   if (!done) return false;
-  done(allow === true);
+  done(allow === true, answers);
   return true;
 }
 
@@ -437,7 +480,9 @@ export async function runAgent(root, { prompt, sessionId, fork, resumed, mode: a
       // goes to the panel as an Approve / Deny card and the run waits for the
       // user. Before this there was no one to ask and the call failed as
       // "requires approval". The classifier's outright blocks never get here.
-      ...(mode === "full" ? { canUseTool: askInPanel(res) } : {}),
+      // In read-only the SDK warns that canUseTool is shadowed for the bare
+      // allowedTools entries: intended, those read-only tools need no question.
+      canUseTool: askInPanel(res, { onlyQuestions: mode !== "full" }),
     },
   });
 

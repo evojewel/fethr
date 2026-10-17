@@ -1487,6 +1487,8 @@ async function askAgent(prompt, images = []) {
           else refreshWorkspace(); // maybe a new file: the tree should show it
         } else if (ev.type === "maybe-changed") {
           refreshWorkspace();
+        } else if (ev.type === "question") {
+          questionCard(ev);
         } else if (ev.type === "permission") {
           askCard(ev);
         } else if (ev.type === "tool-denied") {
@@ -1658,6 +1660,104 @@ function closeAskCards() {
     out.textContent = "not answered: the run ended";
     row.appendChild(out);
   }
+}
+
+// ---------- choice questions (Claude Code's AskUserQuestion) ----------
+// Each question shows its options; multi-select ones are checkboxes. "Other"
+// takes a typed answer instead. Send answers them all; Dismiss answers none.
+let questionSeq = 0;
+function questionCard(ev) {
+  const card = document.createElement("div");
+  card.className = "msg ask-card question-card";
+  const picks = []; // per question: () => answer string or ""
+  for (const q of ev.questions || []) {
+    const n = ++questionSeq;
+    const box = document.createElement("fieldset");
+    box.className = "q";
+    const legend = document.createElement("legend");
+    if (q.header) {
+      const chip = document.createElement("span");
+      chip.className = "q-chip";
+      chip.textContent = q.header;
+      legend.appendChild(chip);
+    }
+    legend.appendChild(document.createTextNode(q.question));
+    box.appendChild(legend);
+    const inputs = [];
+    for (const o of q.options || []) {
+      const lab = document.createElement("label");
+      lab.className = "q-opt";
+      const inp = document.createElement("input");
+      inp.type = q.multiSelect ? "checkbox" : "radio";
+      inp.name = `q${n}`;
+      inp.value = o.label;
+      const t = document.createElement("span");
+      t.className = "q-label";
+      t.textContent = o.label;
+      lab.append(inp, t);
+      if (o.description) {
+        const d = document.createElement("span");
+        d.className = "q-desc";
+        d.textContent = o.description;
+        lab.appendChild(d);
+      }
+      box.appendChild(lab);
+      inputs.push(inp);
+    }
+    const other = document.createElement("input");
+    other.type = "text";
+    other.className = "q-other";
+    other.placeholder = "Other: type your own answer";
+    other.addEventListener("input", () => { if (other.value && !q.multiSelect) inputs.forEach((i) => { i.checked = false; }); });
+    inputs.forEach((i) => i.addEventListener("change", () => { if (i.checked && !q.multiSelect) other.value = ""; }));
+    box.appendChild(other);
+    card.appendChild(box);
+    picks.push([q.question, () => {
+      const chosen = inputs.filter((i) => i.checked).map((i) => i.value);
+      if (other.value.trim()) chosen.push(other.value.trim());
+      return chosen.join(", ");
+    }]);
+  }
+  const row = document.createElement("div");
+  row.className = "ask-btns";
+  const answer = async (send) => {
+    const answers = {};
+    for (const [q, get] of picks) { const a = get(); if (a) answers[q] = a; }
+    if (send && !Object.keys(answers).length) return; // nothing picked yet
+    for (const el of card.querySelectorAll("button, input")) el.disabled = true;
+    let ok = false;
+    try {
+      const r = await f("/api/agent/permission", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: ev.id, allow: send, answers }),
+      });
+      ok = r.ok;
+    } catch { /* shown below */ }
+    row.replaceChildren();
+    const out = document.createElement("span");
+    out.className = "ask-result";
+    out.textContent = !ok ? "couldn't answer: the run already ended"
+      : send ? `answered: ${Object.values(answers).join(" · ")}` : "dismissed";
+    row.appendChild(out);
+    card.classList.add("answered");
+    if (ok) transcript.push({ type: "tool", text: send ? `answered: ${Object.entries(answers).map(([q, a]) => `${q} → ${a}`).join("; ")}` : "dismissed a question" });
+    setPhase("thinking…");
+  };
+  const yes = document.createElement("button");
+  yes.type = "button";
+  yes.className = "ask-yes";
+  yes.textContent = "Send";
+  yes.onclick = () => answer(true);
+  const no = document.createElement("button");
+  no.type = "button";
+  no.className = "ask-no";
+  no.textContent = "Dismiss";
+  no.onclick = () => answer(false);
+  row.append(yes, no);
+  card.appendChild(row);
+  follow(() => chatEl.appendChild(card));
+  setPhase("waiting for you…");
 }
 
 // ---------- queue: messages sent while the agent is working ----------

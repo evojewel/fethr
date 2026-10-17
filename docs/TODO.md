@@ -54,6 +54,11 @@
       run waits, and stop denies. Reproduced with the same command and checked on a real run.
       An "allow everything" answer was tried first and refused by the auto-mode classifier as
       creating an unsafe agent; don't reintroduce it.
+- [ ] **Claude Code's terminal UI doesn't exist in the panel.** Mods, plugin panes, hot reload and
+      slash commands need Claude Code's own terminal interface; fethr runs it through the SDK. On
+      2026-10-17 a full-mode agent built a mod in the panel, then looped launching `claude
+      --plugin-dir` from Bash trying to load it. The context block now tells the agent not to;
+      showing a mod's pane in fethr would be a feature of its own.
 - [ ] **New windows open in read-only.** Asked for full by default on 2026-10-17; the classifier
       refused that change. Needs the owner to make it, or a permission rule allowing it.
 - [ ] **Not yet run against a real agent:** full mode, Attach / Move here, and the native folder

@@ -40,6 +40,11 @@ selected for ⌘C instead.
 the command with Approve and Deny, and the run waits for your answer. Before, those commands
 failed as "requires approval". The auto-mode classifier's outright blocks still apply.
 
+**Choice questions.** When the agent asks you to pick between options, the panel shows the
+options (radios, or checkboxes for multi-select), an Other field for your own answer, and Send /
+Dismiss; your choice goes back to the agent. Before, these showed as an Approve / Deny card with
+raw JSON and no way to choose. Works in read-only too; asking you something is harmless.
+
 **Fixes.** Preferences (theme, widths, auto-save) now survive a relaunch: they were kept per
 origin, and the random port made every launch a new one. Read-only mode now also blocks
 subagents under their current tool name. Replies render headings, lists and quotes.

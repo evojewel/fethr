@@ -1548,6 +1548,48 @@ async function main() {
     await page.close();
   }
 
+  // ---- choice questions: options, not Approve / Deny ----
+  {
+    const dir = path.join(tmp, "choice");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "a.js"), "x = 1\n");
+    const url = await new Promise((resolve) => serve(dir, resolve, { onOpen, sidecar: true }));
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1100, height: 700 });
+    await page.setRequestInterception(true);
+    page.on("request", (r) => {
+      if (!r.url().includes("/api/agent")) return r.continue();
+      const evs = [{ type: "session", id: FORKED },
+        { type: "question", id: "q9", questions: [
+          { question: "Enable hot reloading?", header: "Mods", multiSelect: false,
+            options: [{ label: "Enable for this session", description: "loads now <img src=x onerror=\"window.__pwned=31\">" }, { label: "Not now", description: "" }] },
+          { question: "Which tools?", header: "Tools", multiSelect: true,
+            options: [{ label: "Bash", description: "" }, { label: "Edit", description: "" }] }] },
+        { type: "done", ok: true }];
+      r.respond({ status: 200, contentType: "text/event-stream", body: evs.map((e) => `data: ${JSON.stringify(e)}\n\n`).join("") });
+    });
+    await page.goto(url, { waitUntil: "domcontentloaded" });
+    await page.waitForSelector('#tree [data-p="a.js"]');
+    if (!(await page.evaluate(() => document.body.classList.contains("agent-open")))) await page.click("#toggle-agent");
+    await page.focus("#input");
+    await page.keyboard.type("ask me");
+    await page.keyboard.press("Enter");
+    await page.waitForSelector("#chat .question-card", { timeout: 3000 });
+    const qc = await page.$eval("#chat .question-card", (e) => ({
+      legends: [...e.querySelectorAll("legend")].map((l) => l.textContent),
+      types: [...e.querySelectorAll("fieldset")].map((f) => [...f.querySelectorAll(".q-opt input")].map((i) => i.type)),
+      labels: [...e.querySelectorAll(".q-label")].map((l) => l.textContent),
+      other: e.querySelectorAll(".q-other").length, bad: e.querySelectorAll("img").length,
+      noApprove: ![...e.querySelectorAll("button")].some((b) => b.textContent === "Approve"),
+    }));
+    check("choice: each question shown with its header", qc.legends[0] === "ModsEnable hot reloading?" && qc.legends[1] === "ToolsWhich tools?");
+    check("choice: single choice as radios, multi-select as checkboxes", qc.types[0].join() === "radio,radio" && qc.types[1].join() === "checkbox,checkbox");
+    check("choice: option labels and an Other field per question", qc.labels.join("|") === "Enable for this session|Not now|Bash|Edit" && qc.other === 2);
+    check("choice: not an Approve / Deny card", qc.noApprove);
+    check("choice: option text never becomes markup", qc.bad === 0 && !(await page.evaluate(() => window.__pwned)));
+    await page.close();
+  }
+
   await browser.close();
   fs.rmSync(tmp, { recursive: true, force: true });
   process.exit(failures ? 1 : 0);

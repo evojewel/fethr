@@ -211,6 +211,16 @@
   .ask-card button:hover { border-color: var(--accent); }
   .ask-card button:disabled { opacity: .5; cursor: default; }
   .ask-card .ask-result { font-size: 12px; color: var(--muted); font-style: italic; }
+  .question-card { border-color: var(--accent); }
+  .question-card .q { border: none; margin: 0 0 10px; padding: 0; }
+  .question-card legend { font-weight: 600; font-size: 13px; padding: 0; margin-bottom: 6px; }
+  .question-card .q-chip { font-size: 11px; font-weight: 500; color: var(--muted); border: 1px solid var(--rule); border-radius: 999px; padding: 0 7px; margin-right: 6px; }
+  .question-card .q-opt { display: grid; grid-template-columns: auto 1fr; column-gap: 8px; align-items: baseline; padding: 4px 6px; border-radius: 6px; cursor: pointer; }
+  .question-card .q-opt:hover { background: var(--bg); }
+  .question-card .q-opt input { accent-color: var(--accent); }
+  .question-card .q-desc { grid-column: 2; font-size: 12px; color: var(--muted); }
+  .question-card .q-other { width: 100%; box-sizing: border-box; margin-top: 4px; font: inherit; font-size: 12px; padding: 4px 8px;
+    background: var(--bg); color: var(--ink); border: 1px solid var(--rule); border-radius: 5px; }
   /* Copy button: outside the pre's scroll area, faint until the block is hovered. */
   .msg .code-block { position: relative; white-space: normal; }
   .msg .code-block pre { padding-right: 36px; white-space: pre; }

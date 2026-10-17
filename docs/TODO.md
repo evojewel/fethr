@@ -39,6 +39,11 @@
       about files in folder B can only describe the change: `propose_edit` and `/api/file` refuse
       paths outside the root. Found 2026-10-17 resuming a session recorded in one repo about
       another. Options: say so in `<fethr_context>`, or offer "open folder B" from the refusal.
+- [ ] **Building fethr.app from inside fethr is blocked by macOS.** A full-mode agent's `tauri build`
+      runs as fethr's child, so App Management sees "fethr" modifying an app and blocks it (seen
+      2026-10-17; the bundle was left with a broken signature seal). Build from Terminal, or re-sign
+      after with `codesign --force --deep -s - <app>`. Granting fethr App Management would work but
+      lets any full-mode agent modify any app; not recommended.
 - [ ] **Not yet run against a real agent:** full mode, Attach / Move here, and the native folder
       picker have been tested only with stubs. Run each once in the app before release.
 

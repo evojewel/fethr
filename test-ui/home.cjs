@@ -1391,6 +1391,56 @@ async function main() {
     await page.close();
   }
 
+  // ---- queue: messages sent while the agent is working ----
+  {
+    const dir = path.join(tmp, "queue");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "q.js"), "x = 1\n");
+    const url = await new Promise((resolve) => serve(dir, resolve, { onOpen, sidecar: true }));
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1100, height: 700 });
+    const prompts = [];
+    let delay = 900;
+    await page.setRequestInterception(true);
+    page.on("request", (r) => {
+      if (!r.url().includes("/api/agent")) return r.continue();
+      prompts.push(JSON.parse(r.postData() || "{}").prompt);
+      const evs = [{ type: "session", id: FORKED }, { type: "delta", text: "ok" }, { type: "done", ok: true }];
+      setTimeout(() => r.respond({ status: 200, contentType: "text/event-stream", body: evs.map((e) => `data: ${JSON.stringify(e)}\n\n`).join("") }).catch(() => {}), delay);
+    });
+    await page.goto(url, { waitUntil: "domcontentloaded" });
+    await page.waitForSelector('#tree [data-p="q.js"]');
+    if (!(await page.evaluate(() => document.body.classList.contains("agent-open")))) await page.click("#toggle-agent");
+    const send = async (t) => { await page.focus("#input"); await page.keyboard.type(t); await page.keyboard.press("Enter"); };
+    const idle = () => page.waitForFunction(() => !document.querySelector("#agent-status").classList.contains("on"), { timeout: 8000 });
+
+    await send("first");
+    await sleep(100);
+    await send("second");
+    await send("third");
+    const q = await page.$$eval("#queue .queued span", (s) => s.map((x) => x.textContent));
+    check("queue: Enter while working queues, shown above the input", q.length === 2 && q[0] === "second" && q[1] === "third");
+    check("queue: the input is cleared for the next one", await page.$eval("#input", (i) => i.value === ""));
+    await page.click("#queue .queued:last-child button");
+    check("queue: × drops a queued message", await page.$$eval("#queue .queued", (r) => r.length === 1));
+    await idle();
+    await page.waitForFunction(() => document.querySelector("#queue").hidden, { timeout: 8000 });
+    await idle();
+    check("queue: sent one at a time, in order, after each run", prompts.join("|") === "first|second");
+
+    // stop: queued messages come back to the input instead of being sent
+    delay = 2500;
+    await send("slow one");
+    await sleep(150);
+    await send("later");
+    await page.click("#stop");
+    await idle();
+    await sleep(200);
+    check("queue: stop returns queued text to the input, unsent", (await page.$eval("#input", (i) => i.value)) === "later" &&
+      !prompts.includes("later") && await page.$eval("#queue", (e) => e.hidden));
+    await page.close();
+  }
+
   await browser.close();
   fs.rmSync(tmp, { recursive: true, force: true });
   process.exit(failures ? 1 : 0);

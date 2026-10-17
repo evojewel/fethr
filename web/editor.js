@@ -1297,6 +1297,7 @@ async function askAgent(prompt, images = []) {
   let sawError = false; // an error/ended/stopped line already explains a missing reply
   let doneDetail = null;
   let replyNote = false; // the bubble got a plain-text error instead of a reply
+  let stopped = false; // the stop button: queued messages go back to the composer
   const runMode = agentMode; // a switch mid-run applies from the next message
   const userEl = recordAndAdd({ type: "user", text: prompt, ...(images.length ? { images: images.length } : {}) });
   if (images.length) addImageThumbs(userEl, images);
@@ -1411,6 +1412,7 @@ async function askAgent(prompt, images = []) {
     }
   } catch (e) {
     sawError = true;
+    if (e.name === "AbortError") stopped = true;
     if (e.name === "AbortError") recordAndAdd({ type: "tool", text: "stopped" });
     else recordAndAdd({ type: "tool", text: `agent unreachable: ${e.message}` });
   } finally {
@@ -1435,6 +1437,7 @@ async function askAgent(prompt, images = []) {
     setPhase(null);
     streaming = false;
     abortCtl = null;
+    drainQueue(stopped);
   }
 }
 
@@ -1501,6 +1504,47 @@ function offerForkIfBusy(msgEl) {
 // "/name" at the start (a path like /Users/x/a.js is not one: the name must
 // end at a space or the end). fethr's agent is not Claude Code's REPL, so its
 // slash commands do nothing here; say so, and say where the real thing is.
+// ---------- queue: messages sent while the agent is working ----------
+// Like Claude Code in a terminal: they wait above the composer and go out one
+// at a time as each run ends. Stop puts them back in the composer unsent.
+let queued = []; // { text, images }
+const queueEl = $("#queue");
+function renderQueue() {
+  queueEl.replaceChildren();
+  queueEl.hidden = !queued.length;
+  queued.forEach((q, i) => {
+    const row = document.createElement("div");
+    row.className = "queued";
+    const label = document.createElement("b");
+    label.textContent = "queued";
+    const t = document.createElement("span");
+    const n = q.images.length;
+    t.textContent = (n ? (n === 1 ? "[1 image] " : `[${n} images] `) : "") + q.text;
+    t.title = q.text;
+    const x = document.createElement("button");
+    x.type = "button";
+    x.textContent = "×";
+    x.title = "Don't send";
+    x.onclick = () => { queued.splice(i, 1); renderQueue(); };
+    row.append(label, t, x);
+    queueEl.appendChild(row);
+  });
+}
+function drainQueue(stopped) {
+  if (!queued.length) return;
+  if (stopped) {
+    inputEl.value = [...queued.map((q) => q.text), inputEl.value].filter(Boolean).join("\n\n");
+    pendingImages = [...queued.flatMap((q) => q.images), ...pendingImages].slice(0, MAX_IMAGES);
+    queued = [];
+    renderQueue();
+    renderCtxBar();
+    return;
+  }
+  const next = queued.shift();
+  renderQueue();
+  setTimeout(() => askAgent(next.text || "(see the attached image)", next.images), 0);
+}
+
 const SLASH_RE = /^\/([a-z][\w:-]*)(\s|$)/i;
 function terminalHint() {
   const id = agentSession || resumedId;
@@ -1574,15 +1618,19 @@ inputEl.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
     const t = inputEl.value.trim();
-    if ((!t && !pendingImages.length) || streaming) return;
+    if (!t && !pendingImages.length) return;
     if (t && SLASH_RE.test(t) && !pendingImages.length) {
       inputEl.value = "";
-      return slashCommand(t);
+      return slashCommand(t); // local, so it answers even mid-run
     }
     inputEl.value = "";
     const imgs = pendingImages;
     pendingImages = [];
     renderCtxBar();
+    if (streaming) {
+      queued.push({ text: t, images: imgs });
+      return renderQueue();
+    }
     askAgent(t || "(see the attached image)", imgs);
   }
 });

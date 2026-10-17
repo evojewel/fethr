@@ -27,6 +27,11 @@ They show as thumbnails you can remove, go with your next message as image block
 in the sent message. Images larger than 1568px on the long edge are scaled down first; up to six
 per message, 5 MB each. Saved chats keep only "[2 images]", never the image data.
 
+**Queued messages.** Enter while the agent is working queues the message above the composer (×
+drops it); queued messages go out one at a time as each run ends. Stop puts them back in the
+composer unsent. Consecutive tool steps fold into one row with short paths, and the status bar
+stays on one line in narrow windows.
+
 **Fixes.** Preferences (theme, widths, auto-save) now survive a relaunch: they were kept per
 origin, and the random port made every launch a new one. Read-only mode now also blocks
 subagents under their current tool name. Replies render headings, lists and quotes.

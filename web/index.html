@@ -355,6 +355,12 @@
   .msg-images { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
   .msg-images img { max-height: 160px; max-width: min(100%, 320px); border-radius: 6px; border: 1px solid var(--rule); }
   .msg-images-note { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  #queue { display: flex; flex-direction: column; gap: 4px; margin-bottom: 6px; }
+  #queue .queued { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); min-width: 0; }
+  #queue .queued b { font-weight: 600; flex-shrink: 0; }
+  #queue .queued span { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink); }
+  #queue .queued button { background: none; border: none; color: var(--muted); cursor: pointer; padding: 0 4px; }
+  #queue .queued button:hover { color: var(--accent); }
   .mention-menu {
     display: none; position: absolute; bottom: 100%; left: 8px; right: 8px;
     margin-bottom: 4px; max-height: 160px; overflow-y: auto;
@@ -632,6 +638,7 @@
   </div>
   <div id="agent-status"><span class="pulse"></span><span id="phase">thinking…</span><button id="stop">stop</button></div>
   <div id="composer">
+    <div id="queue" hidden></div>
     <div id="ctx-bar"></div>
     <div id="mention-menu" class="mention-menu"></div>
     <div class="composer-row">

@@ -167,6 +167,8 @@ test("the context block states the mode", async () => {
   assert.deepEqual(full, [
     "You are in fethr's agent panel in full mode: Claude Code's tools are available and run without asking; " +
       "an auto-mode classifier may block risky actions. The user sees your edits in their editor.",
+    "Claude Code's terminal-only features (slash commands, mods and plugin panes, hot reload) don't exist in fethr's panel. " +
+      "Don't start `claude` from Bash to reach them; tell the user to use them in a Claude Code terminal session instead.",
     "This conversation was started elsewhere (CLI) and resumed in fethr.",
   ]);
   const ro = contextLines((await run({ mode: "something" }, [])).call.prompt);

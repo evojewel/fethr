@@ -111,7 +111,8 @@ function scheduleAutoSave() {
 // typing (the normal case) still autosaves as usual.
 const markDirty = (d, skipAutosave) => {
   dirty = d;
-  $("#file").textContent = current ? current + (d ? " •" : "") : "no file open";
+  $("#file").textContent = current ? shortPath(current) + (d ? " •" : "") : "no file open";
+  $("#file").title = current || "";
   if (d && !skipAutosave) scheduleAutoSave();
 };
 
@@ -248,6 +249,7 @@ let gitBranch = null; // real, server-checked — never let the agent guess this
 // mounts web/home.js instead of the editor and the editor's shortcuts stand down.
 let homeMode = false;
 let workspaceRoot = null; // absolute; file-changed paths may come either way
+let workspaceRealRoot = null; // the same folder with symlinks resolved
 
 async function boot() {
   let meta;
@@ -265,6 +267,7 @@ async function boot() {
     return mountHome(home, { f, renderMd }); // renderMd escapes before it marks up
   }
   workspaceRoot = typeof meta.root === "string" ? meta.root : null;
+  workspaceRealRoot = typeof meta.realRoot === "string" ? meta.realRoot : workspaceRoot;
   $("#root").textContent = meta.name;
   document.title = `${meta.name} — fethr`;
   gitBranch = meta.gitBranch || null;
@@ -1013,8 +1016,60 @@ function renderEntry(entry, live = false) {
     follow(() => chatEl.appendChild(box));
     return box;
   }
-  if (entry.type === "tool") return addMsg("tool", null, entry.text);
+  if (entry.type === "tool") return entry.text.startsWith("⚙ ") ? addToolStep(entry.text) : addMsg("tool", null, entry.text);
   if (entry.type === "proposal") return renderProposal(entry, { live });
+}
+
+// ---------- tool steps: short paths, consecutive steps folded into one row ----------
+// A run of Read/Grep/Bash calls used to print one full-width line each, with
+// absolute paths. Now consecutive steps share one row that shows the latest
+// step and a count, and expands to the list. Full text stays in the tooltip.
+const MAX_PATH_SHOWN = 48;
+function shortPath(p) {
+  let s = p;
+  for (const r of [workspaceRoot, workspaceRealRoot]) {
+    if (r && s.startsWith(r + "/")) { s = s.slice(r.length + 1); break; }
+  }
+  if (s.length <= MAX_PATH_SHOWN) return s;
+  const parts = s.split("/");
+  if (parts.length <= 3) return s;
+  const head = parts[0] === "" ? "/" + parts[1] : parts[0];
+  return `${head}/…/${parts.slice(-2).join("/")}`;
+}
+const shortStep = (text) => text.split(" ").map((t) => (t.includes("/") ? shortPath(t) : t)).join(" ");
+
+function addToolStep(text) {
+  const last = chatEl.lastElementChild;
+  let group = last && last.classList.contains("tool-group") ? last : null;
+  if (!group) {
+    group = document.createElement("details");
+    group.className = "msg tool tool-group single";
+    const sum = document.createElement("summary");
+    const lastEl = document.createElement("span");
+    lastEl.className = "last";
+    const count = document.createElement("span");
+    count.className = "count";
+    sum.append(lastEl, count);
+    // One step has nothing to expand.
+    sum.addEventListener("click", (e) => { if (group.classList.contains("single")) e.preventDefault(); });
+    const lines = document.createElement("div");
+    lines.className = "lines";
+    group.append(sum, lines);
+    follow(() => chatEl.appendChild(group));
+  }
+  const short = shortStep(text.slice(2)); // the row draws its own ⚙ or ▸
+  const line = document.createElement("div");
+  line.textContent = short;
+  line.title = text;
+  const lines = group.querySelector(".lines");
+  follow(() => lines.appendChild(line));
+  const n = lines.children.length;
+  group.classList.toggle("single", n === 1);
+  const lastEl = group.querySelector(".last");
+  lastEl.textContent = short;
+  lastEl.title = text;
+  group.querySelector(".count").textContent = n > 1 ? ` · ${n} steps` : "";
+  return group;
 }
 
 function recordAndAdd(entry) {

@@ -621,7 +621,7 @@ async function main() {
     await page.waitForFunction(() => /forked from/.test(document.querySelector("#chat").textContent), { timeout: 5000 });
     const chat = await page.$eval("#chat", (c) => c.textContent);
     check("resume: earlier prompt shown", chat.includes("please refactor the parser"));
-    check("resume: tool entry in tool style", await page.$$eval("#chat .msg.tool", (ms) => ms.some((m) => m.textContent === "⚙ Read src/parser.js")));
+    check("resume: tool entry in tool style", await page.$$eval("#chat .tool-group .last", (ms) => ms.some((m) => m.textContent === "Read src/parser.js")));
     check("resume: assistant markdown rendered, script not", await page.$eval("#chat .msg.assistant strong", (s) => s.textContent === "bold"));
     check("resume: XSS in history did not run", !(await page.evaluate(() => window.__pwned)));
     check("resume: fork line names the session", /forked from: Refactor the parser .*\(original untouched\)/.test(chat));
@@ -664,7 +664,7 @@ async function main() {
         : r.continue());
       await page.goto(url, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(() => /resumed session/.test(document.querySelector("#chat").textContent), { timeout: 5000 });
-      const text = await page.$$eval("#chat .msg", (ms) => ms.map((m) => m.textContent));
+      const text = await page.$$eval("#chat .msg", (ms) => ms.map((m) => (m.classList.contains("tool-group") ? "⚙ " + m.querySelector(".last").textContent : m.textContent)));
       await page.close();
       return text;
     };
@@ -1323,6 +1323,71 @@ async function main() {
     await sleep(300);
     check("images: SVG is refused, with a reason", await page.$eval("#status", (s) => s.textContent.includes("isn't a PNG")) &&
       await page.$$eval("#ctx-bar .ctx-pill.image", (p) => p.length === 0));
+    await page.close();
+  }
+
+  // ---- tool steps fold into one row; paths shortened; one-line footer ----
+  {
+    const dir = path.join(tmp, "steps");
+    const deep = path.join(dir, "backend", "onboarding", "app", "services");
+    fs.mkdirSync(deep, { recursive: true });
+    fs.writeFileSync(path.join(deep, "fp_profile_service_with_a_long_name.py"), "x = 1\n");
+    // sidecar: a CLI-mode server exits the whole test process 30 s after its page closes
+    const url = await new Promise((resolve) => serve(dir, resolve, { onOpen, sidecar: true }));
+    const real = fs.realpathSync(dir);
+    const page = await browser.newPage();
+    await page.setViewport({ width: 720, height: 700 });
+    await page.setRequestInterception(true);
+    page.on("request", (r) => {
+      if (!r.url().includes("/api/agent")) return r.continue();
+      const evs = [
+        { type: "session", id: FORKED },
+        { type: "tool", name: "Read", detail: path.join(real, "backend/onboarding/app/services/fp_profile_service_with_a_long_name.py") },
+        { type: "tool", name: "Grep", detail: path.join(real, "backend") },
+        { type: "tool", name: "Read", detail: path.join(real, "a.py") },
+        { type: "delta", text: "done" },
+        { type: "tool-denied", name: "Bash", detail: "blocked" },
+        { type: "tool", name: "Read", detail: path.join(real, "b.py") },
+        { type: "done", ok: true },
+      ];
+      r.respond({ status: 200, contentType: "text/event-stream", body: evs.map((e) => `data: ${JSON.stringify(e)}\n\n`).join("") });
+    });
+    await page.goto(url, { waitUntil: "domcontentloaded" });
+    await page.waitForSelector('#tree [data-p$="fp_profile_service_with_a_long_name.py"]');
+    if (!(await page.evaluate(() => document.body.classList.contains("agent-open")))) await page.click("#toggle-agent");
+    await page.focus("#input");
+    await page.keyboard.type("look around");
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => !document.querySelector("#agent-status").classList.contains("on"), { timeout: 3000 });
+
+    const g = await page.$$eval("#chat .tool-group", (gs) => gs.map((x) => ({
+      last: x.querySelector(".last").textContent, title: x.querySelector(".last").title,
+      count: x.querySelector(".count").textContent, n: x.querySelectorAll(".lines div").length,
+      single: x.classList.contains("single"), first: x.querySelector(".lines div").textContent,
+    })));
+    check("steps: consecutive steps share one row; a non-step line starts a new one", g.length === 2 && g[0].n === 3 && g[1].n === 1);
+    check("steps: the row shows the latest step and a count", g[0].last === "Read a.py" && g[0].count === " · 3 steps");
+    check("steps: paths are relative to the folder", g[0].first.startsWith("Read backend/"));
+    check("steps: a long path is shortened in the middle", g[0].first === "Read backend/…/services/fp_profile_service_with_a_long_name.py");
+    check("steps: the full text stays in the tooltip", g[0].title === `⚙ Read ${path.join(real, "a.py")}`);
+    check("steps: a lone step has nothing to expand", g[1].single && g[1].count === "");
+    check("steps: collapsed until clicked", await page.$eval("#chat .tool-group", (x) => !x.open));
+    await page.click("#chat .tool-group summary");
+    check("steps: click expands the list", await page.$eval("#chat .tool-group", (x) => x.open));
+    check("steps: the denial line still stands on its own", await page.$$eval("#chat .msg.tool:not(.tool-group)", (ms) => ms.some((m) => m.textContent === "blocked: Bash — blocked")));
+
+    // footer stays one line in a narrow window, with the open file shortened
+    await page.click('#tree [data-p$="fp_profile_service_with_a_long_name.py"]');
+    await sleep(300);
+    const ft = await page.evaluate(() => {
+      const f = document.querySelector("footer");
+      const file = document.querySelector("#file");
+      return { oneLine: f.scrollHeight <= f.clientHeight + 1, text: file.textContent, title: file.title,
+        wrapped: [...f.querySelectorAll("label")].some((l) => l.getBoundingClientRect().height > 24) };
+    });
+    check("footer: one line at 720px, nothing wraps", ft.oneLine && !ft.wrapped);
+    check("footer: the open file is shortened, full path in the tooltip",
+      ft.text.startsWith("backend/…/") && ft.title === "backend/onboarding/app/services/fp_profile_service_with_a_long_name.py");
     await page.close();
   }
 

@@ -375,7 +375,9 @@ export function serve(root, onReady, opts = {}) {
       const channel = opts.sidecar ? "app" : "npm";
       if (!root) return sendJson(res, 200, { mode: "home", version: VERSION, channel });
       const meta = {
-        mode: "editor", root, name: path.basename(root), gitBranch: getGitBranch(root),
+        // realRoot: tools may report /private/var/… for a root opened as /var/…
+        mode: "editor", root, realRoot: (() => { try { return fs.realpathSync(root); } catch { return root; } })(),
+        name: path.basename(root), gitBranch: getGitBranch(root),
         version: VERSION, channel,
       };
       if (opts.session) {

@@ -59,12 +59,16 @@ test("the context block lists exactly the tools the SDK is given", async () => {
   const lines = contextLines(call.prompt);
   const avail = listAfter(lines.find((l) => l.startsWith("Tools available: ")), "Tools available: ");
   assert.deepEqual(avail, call.options.allowedTools.map((t) => t.replace(/^mcp__fethr__/, "")));
-  const off = listAfter(lines.find((l) => l.startsWith("Disabled by fethr's design")), "the user): ");
+  const off = listAfter(lines.find((l) => l.startsWith("Disabled in read-only mode")), "settings file): ");
   assert.deepEqual(off.map((t) => t.replace(/ \(subagents\)$/, "")), call.options.disallowedTools);
   for (const t of ["Bash", "Write", "Edit", "WebFetch", "WebSearch", "Agent"]) assert.ok(call.options.disallowedTools.includes(t), t);
   assert.ok(lines.some((l) => /slash commands are not available/.test(l)));
   assert.ok(!lines.some((l) => /resumed/.test(l)), "not resumed: no resume line");
   assert.match(call.options.systemPrompt.append, /never read settings files|Never read settings files/i);
+  // Read-only agents must point at the full-mode switch, not send the user to another app.
+  assert.ok(lines.some((l) => /switch this window to full mode/.test(l)), "context names the full-mode switch");
+  assert.match(call.options.systemPrompt.append, /switching it to full/);
+  assert.match(call.options.systemPrompt.append, /do not send the user to another app/);
 });
 
 test("a resumed conversation says where it came from, and only a plain label gets in", async () => {

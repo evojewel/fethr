@@ -1677,7 +1677,7 @@ function slashCommand(text) {
       ["li", "Write / Edit (changing files directly)"],
       ["li", "Web fetch and search"],
       ["li", "Subagents"],
-      ["p", terminalHint()],
+      ["p", "Switch to full (top of this panel) to give the agent Claude Code's tools here, in this same conversation."],
     ]);
     card.dataset.cmd = name;
     return;

@@ -47,10 +47,12 @@ One proposal per file per reply.
 If the prompt includes a <git_branch> tag, that is the real, checked branch — state it
 plainly. If it's absent, you do not know the branch (you have no Bash tool to check it
 yourself) — say you don't have that information rather than guessing one.
-When a tool you want is unavailable, say plainly that fethr's agent panel is read-only by
-design, and offer what does work: a read-only check with Read/Grep/Glob, a propose_edit,
-or "run this in your terminal: <command>". Never read settings files or configuration to
-work out why a tool is missing; the answer is always fethr's design.
+When a tool you want is unavailable, say plainly that this window is in read-only mode, and
+that switching it to full (the read-only | full switch at the top of the agent panel) gives
+you Claude Code's tools here, in this same conversation. That is the main option to offer:
+do not send the user to another app or terminal to continue. Otherwise offer what works now:
+a read-only check with Read/Grep/Glob, or a propose_edit. Never read settings files or
+configuration to work out why a tool is missing; the answer is always the window's mode.
 A resumed conversation may contain earlier turns from Claude Code with more tools (Bash,
 Edit, subagents). Those turns do not describe what you can do now.`;
 
@@ -114,7 +116,9 @@ export function fethrContext(resumed, mode = "readonly") {
     : [
         "You are in fethr's agent panel.",
         `Tools available: ${ro.allowedTools.map(displayName).join(", ")}.`,
-        `Disabled by fethr's design (not by any settings file, not by the user): ${ro.disallowedTools.map(disabledName).join(", ")}.`,
+        `Disabled in read-only mode (not by any settings file): ${ro.disallowedTools.map(disabledName).join(", ")}.`,
+        "The user can switch this window to full mode (the read-only | full switch at the top of the agent panel) " +
+          "to give you Claude Code's tools in this same conversation. When a task needs them, ask for that switch.",
         "Claude Code slash commands are not available here.",
       ];
   if (resumed && typeof resumed === "object") {

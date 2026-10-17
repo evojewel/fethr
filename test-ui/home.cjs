@@ -800,7 +800,7 @@ async function main() {
     await typeSend("/permissions");
     const card = await page.$eval('#chat .local-card[data-cmd="permissions"]', (c) => c.textContent).catch(() => "");
     check("slash: /permissions renders a local card", card.includes("Read files") && card.includes("Propose an edit") && card.includes("Bash") && card.includes("Subagents"));
-    check("slash: card gives the terminal command for this session", card.includes(`claude --resume ${ID.plain}`));
+    check("slash: read-only card points to the full switch, not another app", card.includes("Switch to full") && !card.includes("claude --resume"));
     await typeSend("/tools");
     check("slash: /tools shows the same card", !!(await page.$('#chat .local-card[data-cmd="tools"]')));
     await typeSend("/compact now");

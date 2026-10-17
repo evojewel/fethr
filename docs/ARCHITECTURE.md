@@ -35,6 +35,14 @@ push the difference into how the window gets its URL, not into the page's own JS
    Terminal. A `$SHELL -l -c "node ..."` wrapper was tried first and discarded — it can
    hang indefinitely if anything in the user's shell profile is slow or interactive
    (nvm lazy-load, prompt frameworks, update checks), with no useful error.
+   **The agent's PATH is a separate problem, solved differently** (2026-10-17,
+   `src/shell-env.js`). The sidecar inherits the same bare PATH and passes it to the
+   agent, so its shell commands couldn't find npm or Homebrew tools and node-based MCP
+   servers failed to start. Finding node is a startup-blocking question; the agent's PATH
+   isn't. So the sidecar asks the login shell once, in the background
+   (`$SHELL -ilc`, output read between markers), with a hard 4 s timeout and a SIGKILL,
+   falling back to the usual tool dirs. Only the first agent request waits for it. That
+   timeout is what the discarded wrapper lacked. Measured on a real profile: 0.4 s.
 2. Spawns `node bin/fethr.js <root> --sidecar` from `Resources/sidecar/` (staged by
    `scripts/stage-sidecar.sh`, run as part of `beforeBuildCommand`) and reads a single
    `FETHR_URL=...` line from its stdout.

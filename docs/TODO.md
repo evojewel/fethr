@@ -44,11 +44,14 @@
       2026-10-17; the bundle was left with a broken signature seal). Build from Terminal, or re-sign
       after with `codesign --force --deep -s - <app>`. Granting fethr App Management would work but
       lets any full-mode agent modify any app; not recommended.
-- [ ] **Agent shells get the bare macOS PATH.** Launched from the app, the sidecar (and so the
-      agent's shell and its MCP servers) inherits launchd's `/usr/bin:/bin:/usr/sbin:/sbin`: no
-      npm, nvm node or Homebrew tools, so `npm` fails and node-based MCP servers don't start
-      (seen 2026-10-17). Fix: give the sidecar the login shell's PATH, read with a short timeout
-      (the earlier `$SHELL -l` attempt could hang without one), falling back to known tool dirs.
+- [x] **Agent shells get the bare macOS PATH** *(fixed 2026-10-17)*. The sidecar now reads the
+      login shell's PATH once, in the background, with a 4 s timeout and fallback dirs
+      (`src/shell-env.js`, ARCHITECTURE "The sidecar"). Verified in a bare launchd-style env: the
+      agent's shell found npm, nvm node and claude.
+- [ ] **Full mode with the Haiku model refused a Bash call** ("requires approval") in a test on
+      2026-10-17; the default model ran the same call. Hypothesis, unconfirmed: auto mode isn't
+      available for Haiku, so it falls back to asking, and fethr has no way to answer. If true,
+      the panel should say so, or full mode should not offer Haiku.
 - [ ] **Not yet run against a real agent:** full mode, Attach / Move here, and the native folder
       picker have been tested only with stubs. Run each once in the app before release.
 

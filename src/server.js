@@ -19,6 +19,7 @@ import {
   attachInTerminal, stopBackgroundSession, listSubagents, AGENT_ID_RE, latestContinuation, setRecentHidden,
 } from "./sessions.js";
 import { readPrefs, mergePrefs, MAX_PREFS_BODY } from "./prefs.js";
+import { fixPath } from "./shell-env.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DIST = path.join(HERE, "..", "dist");
@@ -300,6 +301,8 @@ function readJsonBody(req, max) {
   });
 }
 
+let pathReady = null; // once per process: the sidecar's PATH fix (see serve)
+
 export function serve(root, onReady, opts = {}) {
   const home = !!opts.home;
   root = home ? null : path.resolve(root);
@@ -324,6 +327,12 @@ export function serve(root, onReady, opts = {}) {
   // force-quit or a crash — then launchd adopts the child and it would serve
   // forever. So the sidecar watches its parent: the moment the parent pid
   // changes (re-parenting to 1), it exits.
+  // A GUI-launched app has launchd's bare PATH; give the agent the user's
+  // (src/shell-env.js). Started now, in the background: only the first agent
+  // request waits for it, and for at most its timeout. The CLI was started
+  // from a shell and already has the right PATH.
+  if (opts.sidecar && !pathReady) pathReady = fixPath(process.env).catch(() => null);
+
   if (opts.sidecar) {
     const parent = process.ppid;
     // Unix re-parents an orphan, so ppid changes. Windows never does: ppid
@@ -553,7 +562,7 @@ export function serve(root, onReady, opts = {}) {
       return send(res, 200, JSON.stringify(listTree(root)));
     }
     if (req.method === "POST" && u.pathname === "/api/agent") {
-      import("./agent.js").then(
+      Promise.resolve(pathReady).then(() => import("./agent.js")).then(
         (m) => m.handleAgent(root, req, res),
         (e) => send(res, 500, JSON.stringify({ error: "agent unavailable: " + (e.message || e) }))
       );

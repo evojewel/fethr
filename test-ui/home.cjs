@@ -1513,6 +1513,41 @@ async function main() {
     await page.close();
   }
 
+  // ---- permission question card (full mode) ----
+  // The stub sends the whole stream at once, so the run has ended by the time
+  // the card is drawn: this checks the card itself and that it closes when the
+  // run ends. The click-and-answer path is checked against a real run.
+  {
+    const dir = path.join(tmp, "ask");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "a.js"), "x = 1\n");
+    const url = await new Promise((resolve) => serve(dir, resolve, { onOpen, sidecar: true }));
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1100, height: 700 });
+    await page.setRequestInterception(true);
+    page.on("request", (r) => {
+      if (!r.url().includes("/api/agent")) return r.continue();
+      const evs = [{ type: "session", id: FORKED },
+        { type: "permission", id: "q1", name: "Bash", detail: "echo <img src=x onerror=\"window.__pwned=21\">" },
+        { type: "done", ok: true }];
+      r.respond({ status: 200, contentType: "text/event-stream", body: evs.map((e) => `data: ${JSON.stringify(e)}\n\n`).join("") });
+    });
+    await page.goto(url, { waitUntil: "domcontentloaded" });
+    await page.waitForSelector('#tree [data-p="a.js"]');
+    if (!(await page.evaluate(() => document.body.classList.contains("agent-open")))) await page.click("#toggle-agent");
+    await page.focus("#input");
+    await page.keyboard.type("run something");
+    await page.keyboard.press("Enter");
+    await page.waitForSelector("#chat .ask-card", { timeout: 3000 });
+    await page.waitForFunction(() => !document.querySelector("#agent-status").classList.contains("on"), { timeout: 3000 });
+    const c = await page.$eval("#chat .ask-card", (e) => ({ q: e.querySelector(".ask-q").textContent, d: e.querySelector(".ask-detail").textContent,
+      result: (e.querySelector(".ask-result") || {}).textContent, buttons: e.querySelectorAll("button").length, bad: e.querySelectorAll("img").length }));
+    check("ask: card names the tool and shows the command as text", c.q === "Claude Code asks to use Bash" && c.d.startsWith("echo <img"));
+    check("ask: command text never becomes markup", c.bad === 0 && !(await page.evaluate(() => window.__pwned)));
+    check("ask: an unanswered question closes when the run ends", c.buttons === 0 && c.result === "not answered: the run ended");
+    await page.close();
+  }
+
   await browser.close();
   fs.rmSync(tmp, { recursive: true, force: true });
   process.exit(failures ? 1 : 0);

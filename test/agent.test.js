@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { runAgent, fethrContext, ALLOWED_TOOLS, DISALLOWED_TOOLS, MODE_OPTIONS, editorSync, checkImages, handleAgent, MAX_IMAGES } from "../src/agent.js";
+import { runAgent, fethrContext, ALLOWED_TOOLS, DISALLOWED_TOOLS, MODE_OPTIONS, editorSync, checkImages, handleAgent, MAX_IMAGES, askInPanel, settleAsk } from "../src/agent.js";
 import { EventEmitter } from "node:events";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "fethr-agent-"));
@@ -279,4 +279,45 @@ test("images: a bad image is a 400 before Claude Code starts", async () => {
   assert.equal(r.status, 400);
   assert.match(JSON.parse(r.body).error, /PNG/);
   assert.equal(calls.length, 0);
+});
+
+test("permission questions: full mode asks the panel and waits; read-only never asks", async () => {
+  const full = fakeQuery([{ type: "result", subtype: "success", result: "ok" }]);
+  await runAgent(os.tmpdir(), { prompt: "x", mode: "full" }, fakeRes(), { queryFn: full.queryFn });
+  assert.equal(typeof full.calls[0].options.canUseTool, "function");
+  assert.ok(!("permissionMode" in full.calls[0].options) || full.calls[0].options.permissionMode === "auto", "still auto mode, never bypass");
+  const ro = fakeQuery([{ type: "result", subtype: "success", result: "ok" }]);
+  await runAgent(os.tmpdir(), { prompt: "x" }, fakeRes(), { queryFn: ro.queryFn });
+  assert.equal(ro.calls[0].options.canUseTool, undefined);
+
+  const listeners = {};
+  const res = Object.assign(fakeRes(), { on: (ev, fn) => { listeners[ev] = fn; } });
+  const ask = askInPanel(res);
+
+  // approve
+  const p1 = ask("Bash", { command: "ls -la" }, {});
+  const e1 = res.events.find((e) => e.type === "permission");
+  assert.deepEqual([e1.name, e1.detail], ["Bash", "ls -la"]);
+  assert.ok(settleAsk(e1.id, true));
+  assert.deepEqual(await p1, { behavior: "allow", updatedInput: { command: "ls -la" } });
+  assert.equal(settleAsk(e1.id, true), false, "single use");
+
+  // deny
+  const p2 = ask("Write", { file_path: "/tmp/x" }, {});
+  const e2 = res.events.filter((e) => e.type === "permission")[1];
+  assert.equal(e2.detail, "/tmp/x");
+  settleAsk(e2.id, false);
+  assert.equal((await p2).behavior, "deny");
+
+  // the SDK's abort signal denies
+  const ac = new AbortController();
+  const p3 = ask("Bash", { command: "sleep 1" }, { signal: ac.signal });
+  ac.abort();
+  assert.equal((await p3).behavior, "deny");
+
+  // stop (the stream closing) denies whatever is still open
+  const p4 = ask("Bash", { command: "rm x" }, {});
+  listeners.close();
+  assert.equal((await p4).behavior, "deny");
+  assert.equal(settleAsk("not-an-id", true), false);
 });

@@ -119,7 +119,9 @@ The panel has two modes, chosen per window in its header. **Read-only is the def
 every window**, and is what the rest of this section describes. **Full** (added 2026-10-17)
 removes the tool restrictions and runs the agent in Claude Code's `auto` permission mode:
 tools run without asking, and Claude Code's classifier may block risky actions, which the
-panel shows as "blocked" lines. Full mode never uses `bypassPermissions`, and it leaves
+panel shows as "blocked" lines. When auto mode can't decide, Claude Code asks; fethr shows the
+question as an Approve / Deny card (`askInPanel` in `src/agent.js`, answered through
+`POST /api/agent/permission`) and the run waits. Stop, or the window closing, denies. Full mode never uses `bypassPermissions`, and it leaves
 `settingSources` unset, so the user's own Claude Code settings, hooks and CLAUDE.md files
 apply as they do in a terminal. Files the agent writes are reloaded into a clean buffer; a
 dirty buffer gets a Reload / Keep mine banner instead. Every request carries a

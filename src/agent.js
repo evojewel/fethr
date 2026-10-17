@@ -21,6 +21,7 @@
 // (The search itself lives in claude-path.js: the session list runs
 // `claude agents` with the same binary and must not load the SDK to find it.)
 
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { query, tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
@@ -291,6 +292,47 @@ export function handleAgent(root, req, res, { queryFn = query } = {}) {
   });
 }
 
+// ---------- permission questions, answered in the panel ----------
+// id -> settle(allow). An id is random and single-use; the page answers it
+// with POST /api/agent/permission. Stop (the stream closing) denies every
+// question still open on that stream.
+const pendingAsks = new Map();
+const MAX_ASK_DETAIL = 400;
+
+function askDetail(name, input) {
+  const i = input && typeof input === "object" ? input : {};
+  const d = typeof i.command === "string" ? i.command
+    : i.file_path || i.notebook_path || i.path || i.url || i.pattern || JSON.stringify(i);
+  return String(d || "").slice(0, MAX_ASK_DETAIL);
+}
+
+export function askInPanel(res) {
+  const open = new Set();
+  res.on("close", () => { for (const id of open) settleAsk(id, false); });
+  return (toolName, input, { signal } = {}) => new Promise((resolve) => {
+    const id = crypto.randomUUID();
+    const done = (allow) => {
+      open.delete(id);
+      pendingAsks.delete(id);
+      resolve(allow
+        ? { behavior: "allow", updatedInput: input }
+        : { behavior: "deny", message: "The user denied this in fethr's panel." });
+    };
+    pendingAsks.set(id, done);
+    open.add(id);
+    if (signal) signal.addEventListener("abort", () => settleAsk(id, false), { once: true });
+    emit(res, { type: "permission", id, name: String(toolName).replace(/^mcp__fethr__/, ""), detail: askDetail(toolName, input) });
+  });
+}
+
+// Answers one open question. Returns false for an unknown or settled id.
+export function settleAsk(id, allow) {
+  const done = pendingAsks.get(id);
+  if (!done) return false;
+  done(allow === true);
+  return true;
+}
+
 function emit(res, obj) {
   res.write(`data: ${JSON.stringify(obj)}\n\n`);
 }
@@ -390,6 +432,12 @@ export async function runAgent(root, { prompt, sessionId, fork, resumed, mode: a
       ...(fork && sessionId ? { forkSession: true } : {}),
       ...(model && MODEL_MAP[model] ? { model: MODEL_MAP[model] } : {}),
       ...(findClaudeExecutable() ? { pathToClaudeCodeExecutable: findClaudeExecutable() } : {}),
+      // Full mode: when Claude Code asks permission (auto mode's classifier
+      // couldn't decide, or the model doesn't support auto mode), the question
+      // goes to the panel as an Approve / Deny card and the run waits for the
+      // user. Before this there was no one to ask and the call failed as
+      // "requires approval". The classifier's outright blocks never get here.
+      ...(mode === "full" ? { canUseTool: askInPanel(res) } : {}),
     },
   });
 

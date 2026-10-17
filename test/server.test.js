@@ -647,3 +647,14 @@ test("Recent: hide and unhide an entry without touching anything on disk; reopen
   assert.deepEqual(l.hidden, []);
   assert.equal(l.visible[0][0], a, "and back on top");
 });
+
+test("/api/agent/permission: answers only a known, open question", async (t) => {
+  const s = await start(fixture(), {});
+  t.after(() => s.close());
+  assert.equal((await post(s.url, "api/agent/permission", { id: 5, allow: true })).status, 400);
+  assert.equal((await post(s.url, "api/agent/permission", { id: "x" })).status, 400, "allow must be a boolean");
+  assert.equal((await post(s.url, "api/agent/permission", { id: "no-such-id", allow: true })).status, 404);
+  const home = await start(null, { home: true });
+  t.after(() => home.close());
+  assert.equal((await post(home.url, "api/agent/permission", { id: "x", allow: true })).status, 400, "no folder: no runs");
+});

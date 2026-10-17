@@ -48,10 +48,14 @@
       login shell's PATH once, in the background, with a 4 s timeout and fallback dirs
       (`src/shell-env.js`, ARCHITECTURE "The sidecar"). Verified in a bare launchd-style env: the
       agent's shell found npm, nvm node and claude.
-- [ ] **Full mode with the Haiku model refused a Bash call** ("requires approval") in a test on
-      2026-10-17; the default model ran the same call. Hypothesis, unconfirmed: auto mode isn't
-      available for Haiku, so it falls back to asking, and fethr has no way to answer. If true,
-      the panel should say so, or full mode should not offer Haiku.
+- [x] **Full mode refused some Bash calls as "requires approval"** *(fixed 2026-10-17)*. Cause:
+      auto mode asked a permission question and fethr had nothing to answer it with. Full mode
+      now passes the question to the panel as an Approve / Deny card (SDK `canUseTool`); the
+      run waits, and stop denies. Reproduced with the same command and checked on a real run.
+      An "allow everything" answer was tried first and refused by the auto-mode classifier as
+      creating an unsafe agent; don't reintroduce it.
+- [ ] **New windows open in read-only.** Asked for full by default on 2026-10-17; the classifier
+      refused that change. Needs the owner to make it, or a permission rule allowing it.
 - [ ] **Not yet run against a real agent:** full mode, Attach / Move here, and the native folder
       picker have been tested only with stubs. Run each once in the app before release.
 

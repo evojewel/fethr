@@ -36,6 +36,10 @@ stays on one line in narrow windows.
 it copies the block's original text and shows ✓. If the clipboard is refused, the block is
 selected for ⌘C instead.
 
+**Approve / Deny in full mode.** When Claude Code asks permission for a command, the panel shows
+the command with Approve and Deny, and the run waits for your answer. Before, those commands
+failed as "requires approval". The auto-mode classifier's outright blocks still apply.
+
 **Fixes.** Preferences (theme, widths, auto-save) now survive a relaunch: they were kept per
 origin, and the random port made every launch a new one. Read-only mode now also blocks
 subagents under their current tool name. Replies render headings, lists and quotes.

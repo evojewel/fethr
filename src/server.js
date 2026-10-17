@@ -26,7 +26,7 @@ const DIST = path.join(HERE, "..", "dist");
 const BIN = path.join(HERE, "..", "bin", "fethr.js");
 const MAX_OPEN_BODY = 64 * 1024;
 // Endpoints that only make sense with a folder open.
-const NEEDS_ROOT = new Set(["/api/file", "/api/tree", "/api/chat", "/api/agent", "/api/recent"]);
+const NEEDS_ROOT = new Set(["/api/file", "/api/tree", "/api/chat", "/api/agent", "/api/agent/permission", "/api/recent"]);
 // /api/recent is called as soon as the agent reports its session id; Claude
 // Code may not have created the transcript yet, so wait this long for it.
 // FETHR_RECENT_WAIT_MS exists for the tests.
@@ -560,6 +560,15 @@ export function serve(root, onReady, opts = {}) {
     }
     if (req.method === "GET" && u.pathname === "/api/tree") {
       return send(res, 200, JSON.stringify(listTree(root)));
+    }
+    if (req.method === "POST" && u.pathname === "/api/agent/permission") {
+      // The panel's answer to a permission question from a full-mode run.
+      readJsonBody(req, MAX_OPEN_BODY).then(async (body) => {
+        if (!body || typeof body.id !== "string" || typeof body.allow !== "boolean") return sendJson(res, 400, { error: "bad request" });
+        const m = await import("./agent.js");
+        return m.settleAsk(body.id, body.allow) ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: "no such question (already answered, or the run ended)" });
+      }).catch((e) => sendJson(res, 500, { error: String(e.message || e) }));
+      return;
     }
     if (req.method === "POST" && u.pathname === "/api/agent") {
       Promise.resolve(pathReady).then(() => import("./agent.js")).then(

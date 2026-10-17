@@ -1487,6 +1487,8 @@ async function askAgent(prompt, images = []) {
           else refreshWorkspace(); // maybe a new file: the tree should show it
         } else if (ev.type === "maybe-changed") {
           refreshWorkspace();
+        } else if (ev.type === "permission") {
+          askCard(ev);
         } else if (ev.type === "tool-denied") {
           recordAndAdd({ type: "tool", text: `blocked: ${ev.name}${ev.detail ? " — " + ev.detail : ""}` });
         } else if (ev.type === "error") {
@@ -1526,6 +1528,7 @@ async function askAgent(prompt, images = []) {
     }
     if (replyRaw || thoughtBox) persistChat();
     if (runMode === "full") refreshWorkspace(); // a full run may have changed anything
+    closeAskCards(); // a question left open when the run ended is moot
     setPhase(null);
     streaming = false;
     abortCtl = null;
@@ -1596,6 +1599,67 @@ function offerForkIfBusy(msgEl) {
 // "/name" at the start (a path like /Users/x/a.js is not one: the name must
 // end at a space or the end). fethr's agent is not Claude Code's REPL, so its
 // slash commands do nothing here; say so, and say where the real thing is.
+// ---------- permission questions (full mode): Approve / Deny ----------
+// Claude Code asks when auto mode's classifier can't decide. The run waits on
+// the server until one of these buttons answers (or stop denies it).
+function askCard(ev) {
+  const card = document.createElement("div");
+  card.className = "msg ask-card";
+  const q = document.createElement("div");
+  q.className = "ask-q";
+  q.textContent = `Claude Code asks to use ${ev.name}`;
+  const d = document.createElement("pre");
+  d.className = "ask-detail";
+  d.textContent = ev.detail || "";
+  const row = document.createElement("div");
+  row.className = "ask-btns";
+  const answer = async (allow) => {
+    for (const b of row.querySelectorAll("button")) b.disabled = true;
+    let ok = false;
+    try {
+      const r = await f("/api/agent/permission", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: ev.id, allow }),
+      });
+      ok = r.ok;
+    } catch { /* shown below */ }
+    row.replaceChildren();
+    const out = document.createElement("span");
+    out.className = "ask-result";
+    out.textContent = ok ? (allow ? "approved" : "denied") : "couldn't answer: the run already ended";
+    row.appendChild(out);
+    card.classList.add("answered");
+    if (ok) transcript.push({ type: "tool", text: `${allow ? "approved" : "denied"}: ${ev.name} ${ev.detail || ""}`.trim() });
+    setPhase("thinking…");
+  };
+  const yes = document.createElement("button");
+  yes.type = "button";
+  yes.className = "ask-yes";
+  yes.textContent = "Approve";
+  yes.onclick = () => answer(true);
+  const no = document.createElement("button");
+  no.type = "button";
+  no.className = "ask-no";
+  no.textContent = "Deny";
+  no.onclick = () => answer(false);
+  row.append(yes, no);
+  card.append(q, d, row);
+  follow(() => chatEl.appendChild(card));
+  setPhase("waiting for you…");
+}
+function closeAskCards() {
+  for (const card of chatEl.querySelectorAll(".ask-card:not(.answered)")) {
+    card.classList.add("answered");
+    const row = card.querySelector(".ask-btns");
+    row.replaceChildren();
+    const out = document.createElement("span");
+    out.className = "ask-result";
+    out.textContent = "not answered: the run ended";
+    row.appendChild(out);
+  }
+}
+
 // ---------- queue: messages sent while the agent is working ----------
 // Like Claude Code in a terminal: they wait above the composer and go out one
 // at a time as each run ends. Stop puts them back in the composer unsent.

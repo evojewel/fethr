@@ -199,6 +199,18 @@
     padding: 8px 10px; overflow-x: auto; font-size: 12px; line-height: 1.45;
     font-family: ui-monospace, Menlo, monospace; margin: 6px 0;
   }
+  /* Permission question from a full-mode run: the run waits for these buttons. */
+  .ask-card { border: 1px solid var(--warn); border-radius: 8px; padding: 8px 10px; white-space: normal; }
+  .ask-card.answered { border-color: var(--rule); }
+  .ask-card .ask-q { font-weight: 600; font-size: 13px; }
+  .ask-card .ask-detail { margin: 6px 0; max-height: 160px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+  .ask-card .ask-btns { display: flex; gap: 8px; align-items: center; }
+  .ask-card button { font: inherit; font-size: 12px; padding: 3px 12px; border-radius: 5px; cursor: pointer;
+    background: none; border: 1px solid var(--rule); color: var(--ink); }
+  .ask-card button.ask-yes { border-color: var(--accent); color: var(--accent); }
+  .ask-card button:hover { border-color: var(--accent); }
+  .ask-card button:disabled { opacity: .5; cursor: default; }
+  .ask-card .ask-result { font-size: 12px; color: var(--muted); font-style: italic; }
   /* Copy button: outside the pre's scroll area, faint until the block is hovered. */
   .msg .code-block { position: relative; white-space: normal; }
   .msg .code-block pre { padding-right: 36px; white-space: pre; }

@@ -327,6 +327,13 @@
   .msg h3 { font-size: 1.15em; } .msg h4 { font-size: 1.05em; } .msg h5 { font-size: 1em; }
   .msg ul, .msg ol { margin: 4px 0; padding-left: 22px; }
   .msg blockquote { margin: 4px 0; padding-left: 10px; border-left: 2px solid var(--rule); color: var(--muted); }
+  /* Tables scroll sideways inside the message instead of widening it. */
+  .msg .md-table { overflow-x: auto; margin: 6px 0; white-space: normal; }
+  .msg table { border-collapse: collapse; font-size: 0.92em; line-height: 1.4; }
+  .msg th, .msg td { border: 1px solid var(--rule); padding: 4px 8px; text-align: left; vertical-align: top; }
+  .msg th { background: var(--bg); font-weight: 600; color: var(--ink); }
+  .msg th.a-c, .msg td.a-c { text-align: center; }
+  .msg th.a-r, .msg td.a-r { text-align: right; font-variant-numeric: tabular-nums; }
   footer #toggle-files[aria-pressed="false"] { color: var(--muted); border-style: dashed; }
   .msg .fork-offer { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-style: normal; }
   .msg .fork-offer button {

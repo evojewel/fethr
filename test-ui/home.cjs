@@ -1032,7 +1032,9 @@ async function main() {
     const md = "# Head <img src=x onerror=\"window.__pwned=11\">\n" +
       "Some text\n- item one <img src=x onerror=\"window.__pwned=12\">\n- item **two**\n" +
       "3. third <script>window.__pwned=13</script>\n4. fourth\n" +
-      "> quoted <img src=x onerror=\"window.__pwned=14\">\n> still quoted\n### Small head\nafter";
+      "> quoted <img src=x onerror=\"window.__pwned=14\">\n> still quoted\n### Small head\nafter\n" +
+      "| Name | Count | Note |\n|:---|:-:|--:|\n| a \\| b | **2** | <img src=x onerror=\"window.__pwned=15\"> |\n| short |\n\n" +
+      "not | a table";
     await page.setRequestInterception(true);
     page.on("request", (r) => {
       if (!r.url().includes("/api/agent")) return r.continue();
@@ -1059,7 +1061,21 @@ async function main() {
     check("md: bulleted list, inline bold still works", m.ul.length === 2 && m.ul[1] === "item <strong>two</strong>");
     check("md: numbered list keeps its start", m.ol.length === 2 && m.olStart === "3" && m.ol[0].includes("<script>"));
     check("md: blockquote", m.bq && m.bq.includes("quoted <img") && m.bq.includes("still quoted"));
-    check("md: no element made from the text (heading, list, quote)", m.bad === 0);
+    check("md: no element made from the text (heading, list, quote, table)", m.bad === 0);
+    const tb = await page.$eval("#chat .msg.assistant:last-of-type", (e) => {
+      const t = e.querySelector(".md-table table");
+      if (!t) return null;
+      return {
+        head: [...t.querySelectorAll("thead th")].map((c) => [c.textContent, c.className]),
+        rows: [...t.querySelectorAll("tbody tr")].map((r) => [...r.children].map((c) => c.innerHTML)),
+        tail: e.textContent.includes("not | a table"),
+      };
+    });
+    check("md: a table renders with its header", tb && tb.head.map((h) => h[0]).join(",") === "Name,Count,Note");
+    check("md: column alignment from the delimiter row", tb && tb.head[0][1] === "" && tb.head[1][1] === "a-c" && tb.head[2][1] === "a-r");
+    check("md: \\| is a literal pipe; inline bold works in cells", tb && tb.rows[0][0] === "a | b" && tb.rows[0][1] === "<strong>2</strong>");
+    check("md: a short row is padded to the header width", tb && tb.rows[1].length === 3 && tb.rows[1][0] === "short");
+    check("md: a stray pipe without a delimiter row stays text", tb && tb.tail);
     check("md: no payload ran", !(await page.evaluate(() => window.__pwned)));
 
     // reading styles

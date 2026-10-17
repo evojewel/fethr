@@ -910,9 +910,34 @@ function renderMd(el, raw) {
   el.innerHTML = html;
 }
 
+// GitHub-style tables: a header row, a delimiter row (---, :--, :-:, --:),
+// then body rows. Cells are already escaped; only fixed tags and one of three
+// fixed alignment classes are added. \| inside a cell is a literal pipe.
+const TABLE_DELIM_RE = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+function tableCells(line) {
+  let s = line.trim();
+  if (s.startsWith("|")) s = s.slice(1);
+  if (s.endsWith("|") && !s.endsWith("\\|")) s = s.slice(0, -1);
+  return s.split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, "|"));
+}
+function mdTable(head, delim, rows) {
+  const aligns = tableCells(delim).map((d) =>
+    d.startsWith(":") && d.endsWith(":") ? "a-c" : d.endsWith(":") ? "a-r" : "");
+  const cell = (tag, text, i) => `<${tag}${aligns[i] ? ` class="${aligns[i]}"` : ""}>${text}</${tag}>`;
+  const width = aligns.length;
+  const row = (cells, tag) => {
+    const padded = cells.slice(0, width);
+    while (padded.length < width) padded.push("");
+    return `<tr>${padded.map((c, i) => cell(tag, c, i)).join("")}</tr>`;
+  };
+  return `<div class="md-table"><table><thead>${row(tableCells(head), "th")}</thead>` +
+    `<tbody>${rows.map((r) => row(tableCells(r), "td")).join("")}</tbody></table></div>`;
+}
+
 // Block markdown on already-escaped text: # to ### headings, - / * and 1.
-// lists, > quotes (">" arrives escaped as &gt;). Only fixed tags and a
-// digits-only start= are added, so nothing from the text becomes markup.
+// lists, > quotes (">" arrives escaped as &gt;), tables. Only fixed tags, a
+// digits-only start= and fixed alignment classes are added, so nothing from
+// the text becomes markup.
 function mdBlocks(text) {
   const out = [];
   let list = null, quote = null;
@@ -921,9 +946,18 @@ function mdBlocks(text) {
     if (quote) out.push(`<blockquote>${quote.join("\n")}</blockquote>`);
     list = quote = null;
   };
-  for (const line of text.split("\n")) {
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     let m;
-    if ((m = line.match(/^(#{1,3}) +(.+)$/))) {
+    if (line.includes("|") && i + 1 < lines.length && TABLE_DELIM_RE.test(lines[i + 1]) && lines[i + 1].includes("-")) {
+      flush();
+      const rows = [];
+      let j = i + 2;
+      while (j < lines.length && lines[j].includes("|") && lines[j].trim()) rows.push(lines[j++]);
+      out.push(mdTable(line, lines[i + 1], rows));
+      i = j - 1;
+    } else if ((m = line.match(/^(#{1,3}) +(.+)$/))) {
       flush();
       const tag = "h" + (m[1].length + 2); // h3–h5: inside a message, never louder than the page
       out.push(`<${tag}>${m[2]}</${tag}>`);

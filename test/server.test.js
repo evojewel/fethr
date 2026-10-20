@@ -291,7 +291,9 @@ test("sidecar: each open request is one FETHR_OPEN=<json> line on stdout", async
   const url = (await nextLine()).replace(/^FETHR_URL=/, "");
   assert.equal((await (await apiFetch(url, "api/meta")).json()).mode, "home");
 
-  const odd = path.join(fixture(), "with\nnewline");
+  // Windows refuses a newline in a file name (mkdir is EINVAL), so a path
+  // there can't split the line; the check runs where such a folder can exist.
+  const odd = path.join(fixture(), process.platform === "win32" ? "plain folder" : "with\nnewline");
   fs.mkdirSync(odd);
   assert.deepEqual(await (await post(url, "api/open", { root: odd })).json(), { ok: true });
   assert.deepEqual(await openLine(), { root: odd }, "a newline in a path stays inside its line");

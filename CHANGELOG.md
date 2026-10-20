@@ -4,6 +4,15 @@ All notable changes to fethr are documented here. Dates are when each version wa
 
 ## Unreleased
 
+## v0.11.0-alpha — 2026-10-20
+
+**A gap in read-only mode, closed.** Read-only's list of refused tools named the subagent tool by
+its old name, `Task`; current Claude Code calls it `Agent`, which the list did not name. It now
+names both. Whether a subagent ever ran in read-only because of this is not known. Version moves to
+0.11.0-alpha for that, and for the new safety surface below (full mode, the Approve / Deny path,
+the home-folder check): a risk retired, not features added. Still alpha: the DMG is ad-hoc signed
+and not notarized.
+
 **A home screen, and more than one window.** Opening the app with no folder now shows recent
 folders and every Claude Code session on the machine: sessions from the CLI, the VS Code/Cursor
 extension and fethr itself, newest first and searchable. **Resume** continues a session in the
@@ -47,7 +56,10 @@ raw JSON and no way to choose. Works in read-only too; asking you something is h
 
 **Fixes.** Preferences (theme, widths, auto-save) now survive a relaunch: they were kept per
 origin, and the random port made every launch a new one. Read-only mode now also blocks
-subagents under their current tool name. Replies render headings, lists and quotes.
+subagents under their current tool name. Replies render headings, lists and quotes. The app's
+agent now gets your login shell's PATH (read once in the background, with a 4 s timeout), so npm,
+nvm and Homebrew tools and node-based MCP servers are found when fethr is opened from the Dock. A
+read-only agent that needs a tool now points you to the full switch instead of another app.
 
 **Windows.** The native shell and its server run there, proven on a real Windows runner by
 `build-windows.yml`: the NSIS installer (5.6 MB) installs silently, the app launches on a folder,

@@ -15,6 +15,10 @@
       old token was dead; an unauthenticated PUT reads as E404). The registry took ~20 min to serve
       it. `version.json` npm line moved. Still no `NPM_TOKEN` secret, so each publish needs a login.
 - [x] **Cut 0.10.0-alpha** — tagged and released 2026-10-02 with the DMG; npm 0.10.0-alpha published the same day.
+- [x] **Cut 0.11.0-alpha** — tagged and released 2026-10-20 (home screen, full mode, the read-only
+      subagent-name gap closed) with the DMG and the Windows installer, both built by CI.
+- [ ] **Publish 0.11.0-alpha to npm.** Still no `NPM_TOKEN` secret, so it needs the owner's
+      `npm login` and a publish by hand; then move `version.json`'s `npm` line.
 - [x] **Surface the agent's real error** — since 0.9.4 the child's stderr tail rides with a failed
       result and the panel shows it after "ended:".
 - [x] **Local API auth** *(2026-09-29, unreleased)* — a token per launch in the URL fragment, required

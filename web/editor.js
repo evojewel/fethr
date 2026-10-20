@@ -6,6 +6,9 @@ import { EditorState, Compartment } from "@codemirror/state";
 import { indentWithTab } from "@codemirror/commands";
 import { oneDark } from "@codemirror/theme-one-dark";
 import { THEMES, loadTheme, saveTheme, isDark } from "./theme.js";
+import { loadPrefs } from "./prefs.js";
+import { claimEsc } from "./keys.js";
+import { mountHome } from "./home.js";
 import { javascript } from "@codemirror/lang-javascript";
 import { python } from "@codemirror/lang-python";
 import { markdown } from "@codemirror/lang-markdown";
@@ -28,6 +31,16 @@ const langBy = (p) => {
 const $ = (s) => document.querySelector(s);
 const langC = new Compartment();
 
+// The per-launch token from the URL fragment (src/server.js). Every /api
+// call carries it; without it the server answers 401.
+const TOKEN = new URLSearchParams(location.hash.slice(1)).get("t") || "";
+const f = (url, init = {}) => fetch(url, { ...init, headers: { ...(init.headers || {}), "x-fethr-token": TOKEN } });
+
+// Preferences (web/prefs.js): server-kept, so they survive a relaunch on a
+// new port. Loaded before the theme is applied; body.booting hides the page
+// until boot() runs. Same interface as localStorage.
+const prefs = await loadPrefs(f);
+
 // ---- theme (web/theme.js) ----
 // Colours are CSS, keyed off <html data-theme>. CodeMirror is the one part
 // that cannot follow a CSS variable for its syntax palette, so it gets
@@ -35,7 +48,7 @@ const langC = new Compartment();
 // its surfaces pointed at the same tokens as the rest of the page.
 const themeC = new Compartment();
 const prefersDark = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : { matches: true, addEventListener() {} };
-let themeId = loadTheme(localStorage);
+let themeId = loadTheme(prefs);
 const surface = EditorView.theme({
   "&": { backgroundColor: "var(--bg)", color: "var(--ink)" },
   ".cm-gutters": { backgroundColor: "var(--bg)", color: "var(--muted)", borderRight: "1px solid var(--rule)" },
@@ -62,11 +75,6 @@ let dirty = false;
 // no app-vs-CLI branching to carry.
 import { decide, fetchManifest, isEnabled, ENABLED_KEY } from "./update.js";
 
-// The per-launch token from the URL fragment (src/server.js). Every /api
-// call carries it; without it the server answers 401.
-const TOKEN = new URLSearchParams(location.hash.slice(1)).get("t") || "";
-const f = (url, init = {}) => fetch(url, { ...init, headers: { ...(init.headers || {}), "x-fethr-token": TOKEN } });
-
 const api = {
   meta: () => f("/api/meta").then((r) => r.json()),
   tree: () => f("/api/tree").then((r) => r.json()),
@@ -88,6 +96,9 @@ const setStatus = (t) => { $("#status").textContent = t; };
 let autoSaveTimer = null;
 function scheduleAutoSave() {
   if (!$("#autosave").checked) return;
+  // While the disk banner asks Reload / Keep mine, an autosave would answer
+  // for the person (and overwrite the agent's change). ⌘S still saves.
+  if (!$("#disk-banner").hidden) return;
   clearTimeout(autoSaveTimer);
   autoSaveTimer = setTimeout(() => {
     if (dirty) save();
@@ -100,17 +111,18 @@ function scheduleAutoSave() {
 // typing (the normal case) still autosaves as usual.
 const markDirty = (d, skipAutosave) => {
   dirty = d;
-  $("#file").textContent = current ? current + (d ? " •" : "") : "no file open";
+  $("#file").textContent = current ? shortPath(current) + (d ? " •" : "") : "no file open";
+  $("#file").title = current || "";
   if (d && !skipAutosave) scheduleAutoSave();
 };
 
 try {
-  const v = localStorage.getItem("fethr.autoSave");
+  const v = prefs.getItem("fethr.autoSave");
   $("#autosave").checked = v === null ? true : v === "1"; // on by default
 } catch { /* private mode — stays checked, just doesn't persist */ }
 $("#autosave").onchange = () => {
   try {
-    localStorage.setItem("fethr.autoSave", $("#autosave").checked ? "1" : "0");
+    prefs.setItem("fethr.autoSave", $("#autosave").checked ? "1" : "0");
   } catch { /* ignore */ }
 };
 
@@ -159,6 +171,7 @@ async function openFile(p) {
     return false;
   }
   current = p;
+  $("#disk-banner").hidden = true;
   view.setState(EditorState.create({ doc: content, extensions: extensions() }));
   markDirty(false);
   setStatus("opened");
@@ -187,6 +200,9 @@ async function save() {
 // depth stack is enough to build the nested accordion — no second tree pass.
 function renderTree(entries) {
   const el = $("#tree");
+  // A refresh (the agent changed files) keeps what was folded and the scroll.
+  const collapsed = new Set([...el.querySelectorAll(".dir-row.collapsed")].map((r) => r.dataset.dir));
+  const scroll = el.scrollTop;
   el.innerHTML = "";
   const stack = [{ depth: 0, el }];
   for (const n of entries) {
@@ -204,6 +220,11 @@ function renderTree(entries) {
       row.append(chev, document.createTextNode(name));
       const children = document.createElement("div");
       children.className = "children";
+      row.dataset.dir = n.path;
+      if (collapsed.has(n.path)) {
+        row.classList.add("collapsed");
+        children.classList.add("collapsed");
+      }
       row.onclick = () => {
         row.classList.toggle("collapsed");
         children.classList.toggle("collapsed");
@@ -215,16 +236,38 @@ function renderTree(entries) {
       row.textContent = name;
       row.dataset.p = n.path;
       row.onclick = () => openFile(n.path);
+      if (n.path === current) row.classList.add("active");
       parent.appendChild(row);
     }
   }
+  el.scrollTop = scroll;
 }
 
 let fileList = [];
 let gitBranch = null; // real, server-checked — never let the agent guess this
+// Home mode (docs/plans/home-screen.md): the server has no root, so boot()
+// mounts web/home.js instead of the editor and the editor's shortcuts stand down.
+let homeMode = false;
+let workspaceRoot = null; // absolute; file-changed paths may come either way
+let workspaceRealRoot = null; // the same folder with symlinks resolved
 
 async function boot() {
-  const meta = await api.meta();
+  let meta;
+  try {
+    meta = await api.meta();
+  } finally {
+    document.body.classList.remove("booting");
+  }
+  if (meta.mode === "home") {
+    homeMode = true;
+    document.body.classList.add("home-mode");
+    document.title = "fethr";
+    const home = $("#home");
+    home.hidden = false;
+    return mountHome(home, { f, renderMd }); // renderMd escapes before it marks up
+  }
+  workspaceRoot = typeof meta.root === "string" ? meta.root : null;
+  workspaceRealRoot = typeof meta.realRoot === "string" ? meta.realRoot : workspaceRoot;
   $("#root").textContent = meta.name;
   document.title = `${meta.name} — fethr`;
   gitBranch = meta.gitBranch || null;
@@ -236,7 +279,11 @@ async function boot() {
   const tree = await api.tree();
   fileList = tree.filter((n) => !n.dir).map((n) => n.path);
   renderTree(tree);
-  await restoreChat();
+  // A window opened on a past session is about the conversation: it starts
+  // agent-only (files hidden). Either kind of window remembers its own choice.
+  setFilesHidden(loadFilesHidden(Boolean(meta.resume && meta.resume.id)));
+  if (meta.resume && meta.resume.id) await resumeSession(meta.resume, meta.name);
+  else await restoreChat();
 }
 
 window.addEventListener("beforeunload", (e) => {
@@ -252,7 +299,7 @@ const toggleSidebar = () => {
   document.body.classList.toggle("sidebar-collapsed");
   syncSidebarIcon();
   try {
-    localStorage.setItem(
+    prefs.setItem(
       "fethr.sidebarCollapsed",
       document.body.classList.contains("sidebar-collapsed") ? "1" : "0"
     );
@@ -260,13 +307,14 @@ const toggleSidebar = () => {
 };
 $("#toggle-sidebar").onclick = toggleSidebar;
 try {
-  if (localStorage.getItem("fethr.sidebarCollapsed") === "1") {
+  if (prefs.getItem("fethr.sidebarCollapsed") === "1") {
     document.body.classList.add("sidebar-collapsed");
   }
 } catch { /* ignore */ }
 syncSidebarIcon();
 
 window.addEventListener("keydown", (e) => {
+  if (homeMode) return;
   if ((e.metaKey || e.ctrlKey) && e.key === "b") {
     e.preventDefault();
     toggleSidebar();
@@ -288,7 +336,7 @@ function makeResizer(handle, { cssVar, min, max, storageKey, beforeStart }) {
     document.removeEventListener("mouseup", onUp);
     const w = parseInt(getComputedStyle(document.documentElement).getPropertyValue(cssVar), 10);
     try {
-      localStorage.setItem(storageKey, String(w));
+      prefs.setItem(storageKey, String(w));
     } catch { /* ignore */ }
   };
   handle.addEventListener("mousedown", (e) => {
@@ -319,7 +367,7 @@ makeResizer($("#resize-sidebar"), {
   },
 });
 try {
-  const w = parseInt(localStorage.getItem("fethr.sidebarWidth"), 10);
+  const w = parseInt(prefs.getItem("fethr.sidebarWidth"), 10);
   if (w >= 160 && w <= 480) document.documentElement.style.setProperty("--sidebar-w", w + "px");
 } catch { /* ignore */ }
 
@@ -336,10 +384,56 @@ makeResizer($("#resize-agent"), {
 // ---------- agent panel ----------
 
 let agentSession = null;
+// True from a "fork" launch until the agent's init event hands back the new
+// session id. Cleared there, not when the request is sent: a request that
+// fails before init must not leave agentSession pointing at the original
+// with no fork flag, or the next message would append to the original.
+let pendingFork = false;
 let streaming = false;
 
 const chatEl = $("#chat");
 const inputEl = $("#input");
+
+// ---------- scroll-follow ----------
+// New content scrolls the transcript only when the reader is already at the
+// bottom (within FOLLOW_PX). Someone reading further up stays put and gets a
+// "Latest ↓" pill instead.
+const FOLLOW_PX = 48;
+const latestBtn = $("#latest");
+const nearBottom = () => chatEl.scrollHeight - chatEl.scrollTop - chatEl.clientHeight <= FOLLOW_PX;
+function scrollChatToEnd() {
+  chatEl.scrollTop = chatEl.scrollHeight;
+  latestBtn.hidden = true;
+}
+function follow(change) {
+  const stick = nearBottom();
+  const out = change();
+  if (stick) scrollChatToEnd();
+  else latestBtn.hidden = false;
+  return out;
+}
+latestBtn.onclick = () => {
+  chatEl.scrollTo({ top: chatEl.scrollHeight, behavior: "smooth" });
+  latestBtn.hidden = true;
+};
+chatEl.addEventListener("scroll", () => { if (nearBottom()) latestBtn.hidden = true; });
+
+// ---------- turn list (agent-only, wide windows): one row per prompt ----------
+const turnsEl = $("#turns");
+function addTurn(msgEl, text) {
+  const b = document.createElement("button");
+  b.type = "button";
+  const n = document.createElement("span");
+  n.className = "n";
+  n.textContent = String(turnsEl.children.length + 1);
+  const t = document.createElement("span");
+  t.className = "t";
+  t.textContent = text;
+  b.append(n, t);
+  b.title = text.slice(0, 300);
+  b.onclick = () => msgEl.scrollIntoView({ block: "start", behavior: "smooth" });
+  turnsEl.appendChild(b);
+}
 
 // ---------- context bar — makes what's actually sent to the agent visible ----------
 // The current file + live selection (auto), plus any files attached with @.
@@ -378,6 +472,124 @@ function renderCtxBar() {
     pill.appendChild(x);
     bar.appendChild(pill);
   }
+  pendingImages.forEach((im, i) => {
+    const pill = document.createElement("span");
+    pill.className = "ctx-pill image";
+    pill.title = `${im.name} — sent with your next message`;
+    const img = document.createElement("img");
+    img.src = im.url; // a data: URL; the CSP allows img-src data:
+    img.alt = im.name;
+    pill.appendChild(img);
+    const x = document.createElement("button");
+    x.textContent = "×";
+    x.title = "Remove";
+    x.onclick = () => {
+      pendingImages.splice(i, 1);
+      renderCtxBar();
+    };
+    pill.appendChild(x);
+    bar.appendChild(pill);
+  });
+}
+
+// ---------- images: paste or drop into the composer ----------
+// Sent with the next message as image blocks (src/agent.js promptInput).
+// Large images are scaled down here first: past ~1568px on the long edge the
+// model downsamples anyway, and a smaller payload keeps under the API's 5 MB
+// per-image limit. Saved chats keep only a count, never the image data.
+
+const IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+const MAX_IMAGES = 6;
+const MAX_IMAGE_EDGE = 1568;
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+let pendingImages = []; // { mediaType, data (base64), url (data: URL), name }
+
+const readAsDataURL = (blob) =>
+  new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(blob);
+  });
+
+async function prepareImage(file) {
+  if (!IMAGE_TYPES.includes(file.type)) throw new Error(`${file.name || "that file"} isn't a PNG, JPEG, GIF or WebP image`);
+  let url = await readAsDataURL(file);
+  let mediaType = file.type;
+  const bmp = await createImageBitmap(file);
+  const scale = Math.min(1, MAX_IMAGE_EDGE / Math.max(bmp.width, bmp.height));
+  // Re-encode only when it helps: a GIF that is already small keeps its frames.
+  if (scale < 1 || file.size > MAX_IMAGE_BYTES * 0.7) {
+    const c = document.createElement("canvas");
+    c.width = Math.max(1, Math.round(bmp.width * scale));
+    c.height = Math.max(1, Math.round(bmp.height * scale));
+    c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+    mediaType = file.type === "image/png" ? "image/png" : "image/jpeg";
+    url = c.toDataURL(mediaType, 0.9);
+    if (mediaType === "image/png" && url.length * 0.75 > MAX_IMAGE_BYTES) {
+      mediaType = "image/jpeg"; // a big screenshot as PNG can still be too large
+      url = c.toDataURL(mediaType, 0.9);
+    }
+  }
+  bmp.close();
+  const data = url.slice(url.indexOf(",") + 1);
+  if (data.length * 0.75 > MAX_IMAGE_BYTES) throw new Error(`${file.name || "image"} is still over 5 MB after scaling down`);
+  return { mediaType, data, url: `data:${mediaType};base64,${data}`, name: file.name || "pasted image" };
+}
+
+async function addImages(files) {
+  for (const file of files) {
+    if (pendingImages.length >= MAX_IMAGES) {
+      setStatus(`at most ${MAX_IMAGES} images per message`);
+      break;
+    }
+    try {
+      pendingImages.push(await prepareImage(file));
+    } catch (e) {
+      setStatus(String(e.message || e));
+    }
+  }
+  renderCtxBar();
+}
+
+const imageFiles = (list) => [...(list || [])].filter((f) => f.type && f.type.startsWith("image/"));
+
+inputEl.addEventListener("paste", (e) => {
+  const files = imageFiles([...(e.clipboardData?.items || [])].filter((it) => it.kind === "file").map((it) => it.getAsFile()).filter(Boolean));
+  if (!files.length) return; // plain text pastes as usual
+  e.preventDefault();
+  addImages(files);
+});
+
+const composerEl = $("#composer");
+composerEl.addEventListener("dragover", (e) => {
+  if (![...(e.dataTransfer?.types || [])].includes("Files")) return;
+  e.preventDefault();
+  composerEl.classList.add("drop-target");
+});
+composerEl.addEventListener("dragleave", (e) => {
+  if (!composerEl.contains(e.relatedTarget)) composerEl.classList.remove("drop-target");
+});
+composerEl.addEventListener("drop", (e) => {
+  composerEl.classList.remove("drop-target");
+  const files = imageFiles(e.dataTransfer?.files);
+  if (!files.length) return;
+  e.preventDefault();
+  addImages(files);
+});
+
+// The thumbnails a sent message showed, kept only for this page's life.
+function addImageThumbs(msgEl, imgs) {
+  const row = document.createElement("div");
+  row.className = "msg-images";
+  for (const im of imgs) {
+    const img = document.createElement("img");
+    img.src = im.url;
+    img.alt = im.name;
+    img.title = im.name;
+    row.appendChild(img);
+  }
+  msgEl.appendChild(row);
 }
 
 // ---------- @-mention: attach any workspace file as context ----------
@@ -486,7 +698,7 @@ const toggleAgent = () => {
   if (opening) {
     let w = 340;
     try {
-      const saved = parseInt(localStorage.getItem("fethr.agentWidth"), 10);
+      const saved = parseInt(prefs.getItem("fethr.agentWidth"), 10);
       if (saved >= 260 && saved <= 640) w = saved;
     } catch { /* ignore */ }
     document.documentElement.style.setProperty("--agent-w", w + "px");
@@ -495,8 +707,66 @@ const toggleAgent = () => {
     document.documentElement.style.setProperty("--agent-w", "0px");
   }
 };
-$("#toggle-agent").onclick = toggleAgent;
+$("#toggle-agent").onclick = () => {
+  // Closing the agent while the files are hidden would leave nothing on
+  // screen, so bring the files back with it.
+  if (document.body.classList.contains("agent-open") && filesHidden()) setFilesHidden(false);
+  toggleAgent();
+};
+
+// ---------- files view: show/hide the sidebar + editor (⌘E) ----------
+// Agent-only is a class: it owns visibility and the grid's track list only.
+// Widths stay JS-owned (--agent-w is set by toggleAgent), per ARCHITECTURE.md's
+// custom-property cascade trap. Remembered per window in sessionStorage.
+const FILES_KEY = "fethr.filesHidden";
+const filesHidden = () => document.body.classList.contains("files-hidden");
+function loadFilesHidden(fallback) {
+  try {
+    const v = sessionStorage.getItem(FILES_KEY);
+    if (v === "1" || v === "0") return v === "1";
+  } catch { /* storage blocked: use the window's default */ }
+  return fallback;
+}
+function setFilesHidden(hide) {
+  if (!hide && document.body.classList.contains("focus-mode")) setFocus(false);
+  document.body.classList.toggle("files-hidden", hide);
+  if (hide && !document.body.classList.contains("agent-open")) toggleAgent();
+  $("#toggle-files").setAttribute("aria-pressed", String(!hide));
+  $("#toggle-files").title = hide ? "Show files and the editor (⌘E)" : "Hide files and the editor: the agent takes the window (⌘E)";
+  try {
+    sessionStorage.setItem(FILES_KEY, hide ? "1" : "0");
+  } catch { /* not remembered, still applied */ }
+  if (!hide) view.requestMeasure(); // CodeMirror measured nothing while hidden
+}
+$("#toggle-files").onclick = () => setFilesHidden(!filesHidden());
+
+// ---------- focus: agent-only with no chrome, only transcript + composer ----------
+// ⌘⇧F or the header's "focus" button; the corner button or Esc leaves it.
+const inFocus = () => document.body.classList.contains("focus-mode");
+function setFocus(on) {
+  if (on && !filesHidden()) setFilesHidden(true);
+  document.body.classList.toggle("focus-mode", on);
+  $("#exit-focus").hidden = !on;
+  if (on) inputEl.focus();
+}
+$("#focus-btn").onclick = () => setFocus(true);
+$("#exit-focus").onclick = () => setFocus(false);
 window.addEventListener("keydown", (e) => {
+  if (homeMode) return;
+  if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "f") {
+    e.preventDefault();
+    setFocus(!inFocus());
+  } else if (e.key === "Escape" && inFocus() && claimEsc(e)) {
+    setFocus(false); // registered on window: anything nearer claimed Esc first
+  }
+});
+window.addEventListener("keydown", (e) => {
+  if (homeMode) return;
+  if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "e") {
+    e.preventDefault();
+    setFilesHidden(!filesHidden());
+    return;
+  }
   if ((e.metaKey || e.ctrlKey) && e.key === "j") {
     e.preventDefault();
     toggleAgent();
@@ -513,8 +783,7 @@ function addMsg(cls, who, text) {
     d.appendChild(w);
   }
   d.appendChild(document.createTextNode(text));
-  chatEl.appendChild(d);
-  chatEl.scrollTop = chatEl.scrollHeight;
+  follow(() => chatEl.appendChild(d));
   return d;
 }
 
@@ -617,8 +886,7 @@ function renderProposal(p, opts = {}) {
     actions.append(accept, reject);
   }
   box.appendChild(actions);
-  chatEl.appendChild(box);
-  chatEl.scrollTop = chatEl.scrollHeight;
+  follow(() => chatEl.appendChild(box));
 }
 
 // Minimal safe markdown: escape everything, then fences / file:line refs /
@@ -627,7 +895,17 @@ function renderProposal(p, opts = {}) {
 // inline-code regex excludes `<` so it never re-wraps the anchor it made.
 function renderMd(el, raw) {
   const esc = raw.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  let html = esc.replace(/```(\w*)\n([\s\S]*?)```/g, (_, _lang, code) => `<pre>${code}</pre>`);
+  // Fences out first (their lines are not headings or lists), blocks on the
+  // escaped text, fences back before the inline rules as before.
+  const fences = [];
+  const fenceRaw = []; // each block's own text, for its copy button
+  let html = esc.replace(/```(\w*)\n([\s\S]*?)```/g, (_, _lang, code) => {
+    const i = fences.push(`<div class="code-block"><pre data-fence="${fenceRaw.length}">${code}</pre></div>`) - 1;
+    fenceRaw.push(code.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&").replace(/\n$/, ""));
+    return `\u0000${i}\u0000`;
+  });
+  html = mdBlocks(html);
+  html = html.replace(/\u0000(\d+)\u0000/g, (_, i) => fences[Number(i)]);
   html = html.replace(/\b([\w./-]+\.\w+):(\d+)(-\d+)?\b/g, (m, p, l1, l2) => {
     if (!fileList.includes(p) && !fileList.some((f) => f.endsWith("/" + p))) return m;
     return `<a href="#" class="fileref" data-p="${p}" data-l1="${l1}" data-l2="${l2 ? l2.slice(1) : ""}">${m}</a>`;
@@ -635,6 +913,128 @@ function renderMd(el, raw) {
   html = html.replace(/`([^`\n<]+)`/g, "<code>$1</code>");
   html = html.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
   el.innerHTML = html;
+  // The copy button carries the block's original text: the inline rules above
+  // also run inside code blocks, so the displayed text can differ (** → bold).
+  el.querySelectorAll("pre[data-fence]").forEach((pre) => addCopyButton(pre, fenceRaw[Number(pre.dataset.fence)] ?? pre.textContent));
+}
+
+// ---------- copy button on code blocks ----------
+const COPY_SVG =
+  '<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="5" y="5" width="9" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M11 3.5V3a1.5 1.5 0 0 0-1.5-1.5H3A1.5 1.5 0 0 0 1.5 3v6.5A1.5 1.5 0 0 0 3 11h.5" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>' +
+  '<svg class="ok" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3 3 7-7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+// The async clipboard API first; the older execCommand path if the webview
+// refuses it. Returns whether the text reached the clipboard.
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch { /* fall through */ }
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.setAttribute("readonly", "");
+  ta.style.cssText = "position:fixed;top:0;left:0;opacity:0";
+  document.body.appendChild(ta);
+  ta.select();
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch { /* refused */ }
+  ta.remove();
+  return ok;
+}
+
+function addCopyButton(pre, text) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "copy-code";
+  b.title = "Copy";
+  b.setAttribute("aria-label", "Copy code");
+  b.innerHTML = COPY_SVG; // a fixed string, never transcript text
+  let timer = null;
+  b.onclick = async () => {
+    const ok = await copyText(text);
+    if (!ok) {
+      // Couldn't reach the clipboard: select the block so ⌘C still works.
+      const r = document.createRange();
+      r.selectNodeContents(pre);
+      const sel = getSelection();
+      sel.removeAllRanges();
+      sel.addRange(r);
+    }
+    b.classList.toggle("done", ok);
+    b.title = ok ? "Copied" : "Selected — press ⌘C";
+    clearTimeout(timer);
+    timer = setTimeout(() => { b.classList.remove("done"); b.title = "Copy"; }, 1500);
+  };
+  pre.parentNode.appendChild(b);
+}
+
+// GitHub-style tables: a header row, a delimiter row (---, :--, :-:, --:),
+// then body rows. Cells are already escaped; only fixed tags and one of three
+// fixed alignment classes are added. \| inside a cell is a literal pipe.
+const TABLE_DELIM_RE = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+function tableCells(line) {
+  let s = line.trim();
+  if (s.startsWith("|")) s = s.slice(1);
+  if (s.endsWith("|") && !s.endsWith("\\|")) s = s.slice(0, -1);
+  return s.split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, "|"));
+}
+function mdTable(head, delim, rows) {
+  const aligns = tableCells(delim).map((d) =>
+    d.startsWith(":") && d.endsWith(":") ? "a-c" : d.endsWith(":") ? "a-r" : "");
+  const cell = (tag, text, i) => `<${tag}${aligns[i] ? ` class="${aligns[i]}"` : ""}>${text}</${tag}>`;
+  const width = aligns.length;
+  const row = (cells, tag) => {
+    const padded = cells.slice(0, width);
+    while (padded.length < width) padded.push("");
+    return `<tr>${padded.map((c, i) => cell(tag, c, i)).join("")}</tr>`;
+  };
+  return `<div class="md-table"><table><thead>${row(tableCells(head), "th")}</thead>` +
+    `<tbody>${rows.map((r) => row(tableCells(r), "td")).join("")}</tbody></table></div>`;
+}
+
+// Block markdown on already-escaped text: # to ### headings, - / * and 1.
+// lists, > quotes (">" arrives escaped as &gt;), tables. Only fixed tags, a
+// digits-only start= and fixed alignment classes are added, so nothing from
+// the text becomes markup.
+function mdBlocks(text) {
+  const out = [];
+  let list = null, quote = null;
+  const flush = () => {
+    if (list) out.push(`<${list.tag}${list.start > 1 ? ` start="${list.start}"` : ""}>${list.items.map((i) => `<li>${i}</li>`).join("")}</${list.tag}>`);
+    if (quote) out.push(`<blockquote>${quote.join("\n")}</blockquote>`);
+    list = quote = null;
+  };
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    let m;
+    if (line.includes("|") && i + 1 < lines.length && TABLE_DELIM_RE.test(lines[i + 1]) && lines[i + 1].includes("-")) {
+      flush();
+      const rows = [];
+      let j = i + 2;
+      while (j < lines.length && lines[j].includes("|") && lines[j].trim()) rows.push(lines[j++]);
+      out.push(mdTable(line, lines[i + 1], rows));
+      i = j - 1;
+    } else if ((m = line.match(/^(#{1,3}) +(.+)$/))) {
+      flush();
+      const tag = "h" + (m[1].length + 2); // h3–h5: inside a message, never louder than the page
+      out.push(`<${tag}>${m[2]}</${tag}>`);
+    } else if ((m = line.match(/^\s*[-*] +(.+)$/))) {
+      if (!list || list.tag !== "ul") { flush(); list = { tag: "ul", items: [] }; }
+      list.items.push(m[1]);
+    } else if ((m = line.match(/^\s*(\d{1,4})[.)] +(.+)$/))) {
+      if (!list || list.tag !== "ol") { flush(); list = { tag: "ol", start: Number(m[1]), items: [] }; }
+      list.items.push(m[2]);
+    } else if ((m = line.match(/^&gt; ?(.*)$/))) {
+      if (!quote) { flush(); quote = []; }
+      quote.push(m[1]);
+    } else {
+      flush();
+      out.push(line + "\n");
+    }
+  }
+  flush();
+  return out.join("").replace(/\n$/, "");
 }
 
 async function jumpToFileRef(p, l1raw, l2raw) {
@@ -666,7 +1066,15 @@ chatEl.addEventListener("click", (e) => {
 
 let transcript = [];
 
+// A window opened on a past session (resumeSession) never writes chat.json:
+// that session lives in ~/.claude/projects and is reachable from home, and
+// writing here would replace the folder's own conversation.
+let resumeMode = false;
+let resumedId = null; // the original session's id, kept after a fork replaces agentSession
+let resumedSource = null; // where it was started ("CLI", "VS Code / Cursor", …), sent with every request
+
 function persistChat() {
+  if (resumeMode) return;
   api.saveChat({ session: agentSession, entries: transcript });
 }
 
@@ -675,7 +1083,18 @@ function persistChat() {
 // a proposal must never auto-apply itself just because it's being
 // redisplayed and the Auto checkbox happens to be on right now.
 function renderEntry(entry, live = false) {
-  if (entry.type === "user") return addMsg("user", "you", entry.text);
+  if (entry.type === "user") {
+    const el = addMsg("user", "you", entry.text);
+    if (entry.images && !live) {
+      // Saved chats keep the count, not the image data.
+      const n = document.createElement("div");
+      n.className = "msg-images-note";
+      n.textContent = entry.images === 1 ? "[1 image]" : `[${entry.images} images]`;
+      el.appendChild(n);
+    }
+    addTurn(el, entry.text || (entry.images ? "[image]" : ""));
+    return el;
+  }
   if (entry.type === "assistant") {
     const el = addMsg("assistant", "agent", "");
     renderMd(el, entry.text);
@@ -686,11 +1105,63 @@ function renderEntry(entry, live = false) {
     box.className = "thought";
     box.innerHTML = "<summary>thought</summary><div class='ttext'></div>";
     box.querySelector(".ttext").textContent = entry.text;
-    chatEl.appendChild(box);
+    follow(() => chatEl.appendChild(box));
     return box;
   }
-  if (entry.type === "tool") return addMsg("tool", null, entry.text);
+  if (entry.type === "tool") return entry.text.startsWith("⚙ ") ? addToolStep(entry.text) : addMsg("tool", null, entry.text);
   if (entry.type === "proposal") return renderProposal(entry, { live });
+}
+
+// ---------- tool steps: short paths, consecutive steps folded into one row ----------
+// A run of Read/Grep/Bash calls used to print one full-width line each, with
+// absolute paths. Now consecutive steps share one row that shows the latest
+// step and a count, and expands to the list. Full text stays in the tooltip.
+const MAX_PATH_SHOWN = 48;
+function shortPath(p) {
+  let s = p;
+  for (const r of [workspaceRoot, workspaceRealRoot]) {
+    if (r && s.startsWith(r + "/")) { s = s.slice(r.length + 1); break; }
+  }
+  if (s.length <= MAX_PATH_SHOWN) return s;
+  const parts = s.split("/");
+  if (parts.length <= 3) return s;
+  const head = parts[0] === "" ? "/" + parts[1] : parts[0];
+  return `${head}/…/${parts.slice(-2).join("/")}`;
+}
+const shortStep = (text) => text.split(" ").map((t) => (t.includes("/") ? shortPath(t) : t)).join(" ");
+
+function addToolStep(text) {
+  const last = chatEl.lastElementChild;
+  let group = last && last.classList.contains("tool-group") ? last : null;
+  if (!group) {
+    group = document.createElement("details");
+    group.className = "msg tool tool-group single";
+    const sum = document.createElement("summary");
+    const lastEl = document.createElement("span");
+    lastEl.className = "last";
+    const count = document.createElement("span");
+    count.className = "count";
+    sum.append(lastEl, count);
+    // One step has nothing to expand.
+    sum.addEventListener("click", (e) => { if (group.classList.contains("single")) e.preventDefault(); });
+    const lines = document.createElement("div");
+    lines.className = "lines";
+    group.append(sum, lines);
+    follow(() => chatEl.appendChild(group));
+  }
+  const short = shortStep(text.slice(2)); // the row draws its own ⚙ or ▸
+  const line = document.createElement("div");
+  line.textContent = short;
+  line.title = text;
+  const lines = group.querySelector(".lines");
+  follow(() => lines.appendChild(line));
+  const n = lines.children.length;
+  group.classList.toggle("single", n === 1);
+  const lastEl = group.querySelector(".last");
+  lastEl.textContent = short;
+  lastEl.title = text;
+  group.querySelector(".count").textContent = n > 1 ? ` · ${n} steps` : "";
+  return group;
 }
 
 function recordAndAdd(entry) {
@@ -710,6 +1181,45 @@ async function restoreChat() {
   addMsg("tool", null, "— restored earlier conversation —");
 }
 
+// Launched with --session (meta.resume): show that session's history from
+// ~/.claude/projects instead of .fethr/chat.json, and point the agent at it.
+// History text is untrusted; renderEntry renders it as text or escaped md.
+const HISTORY_TYPES = new Set(["user", "assistant", "tool"]);
+async function resumeSession(resume, folder) {
+  resumeMode = true;
+  resumedId = resume.id;
+  agentSession = resume.id;
+  pendingFork = Boolean(resume.fork);
+  resumedSource = typeof resume.source === "string" ? resume.source : null;
+  const title = resume.title || "untitled session";
+  const label = `${title} · ${resume.id.slice(0, 8)} · ${folder}`;
+  document.title = `${label} — fethr`;
+  $("#agent-title").textContent = label;
+  $("#agent-title").title = `${resume.fork ? "Forked from" : "Resumed"} session ${resume.id} in ${folder}`;
+  let hist = null, why = "server not answering";
+  try {
+    const r = await f(`/api/session-history?id=${encodeURIComponent(resume.id)}`);
+    const data = await r.json().catch(() => null);
+    if (r.ok) hist = data;
+    else why = (data && data.error) || `error ${r.status}`;
+  } catch { /* why stays as set */ }
+  if (!resumedSource && hist && typeof hist.source === "string") resumedSource = hist.source;
+  if (!hist || !Array.isArray(hist.entries)) {
+    addMsg("tool", null, `— couldn't load this session's earlier turns: ${hist ? "unreadable reply" : why} —`);
+  } else {
+    if (hist.omitted > 0) addMsg("tool", null, `— ${hist.omitted} earlier turns not shown —`);
+    else if (hist.truncated) addMsg("tool", null, "— earlier turns not shown —");
+    for (const e of hist.entries) {
+      if (!e || !HISTORY_TYPES.has(e.type) || typeof e.text !== "string") continue;
+      const entry = { type: e.type, text: e.type === "tool" ? `⚙ ${e.text}` : e.text };
+      transcript.push(entry);
+      renderEntry(entry); // live defaults false
+    }
+  }
+  addMsg("tool", null, pendingFork ? `— forked from: ${title} (original untouched) —` : `— resumed session: ${title} —`);
+  if (!document.body.classList.contains("agent-open")) toggleAgent();
+}
+
 const statusEl = document.querySelector("#agent-status");
 const phaseEl = $("#phase");
 let abortCtl = null;
@@ -727,15 +1237,16 @@ $("#stop").onclick = () => abortCtl && abortCtl.abort();
 
 $("#model").onchange = () => {
   agentSession = null;
+  pendingFork = false;
   addMsg("tool", null, `model → ${$("#model").value || "default"} (new conversation)`);
 };
 
 try {
-  $("#auto").checked = localStorage.getItem("fethr.autoApply") === "1";
+  $("#auto").checked = prefs.getItem("fethr.autoApply") === "1";
 } catch { /* ignore */ }
 $("#auto").onchange = () => {
   try {
-    localStorage.setItem("fethr.autoApply", $("#auto").checked ? "1" : "0");
+    prefs.setItem("fethr.autoApply", $("#auto").checked ? "1" : "0");
   } catch { /* ignore */ }
 };
 
@@ -751,15 +1262,138 @@ function markFableUnavailable() {
   }
   $("#model").value = "";
   agentSession = null;
+  pendingFork = false;
   addMsg("tool", null, "fable 5 isn't available on this account — switched back to default.");
 }
 
-async function askAgent(prompt) {
+// ---------- agent mode: read-only (default) or full ----------
+// Full is Claude Code in its auto permission mode (server side): tools run
+// without asking and a classifier may block risky ones. Opt-in per window,
+// remembered only for this window (sessionStorage). Switching keeps the
+// session; the next message uses the new mode.
+const MODE_KEY = "fethr.agentMode";
+const READONLY_NOTE = $("#composer-note").textContent;
+let agentMode = "readonly";
+try {
+  if (sessionStorage.getItem(MODE_KEY) === "full") agentMode = "full";
+} catch { /* storage blocked: read-only */ }
+function applyMode() {
+  const full = agentMode === "full";
+  document.body.classList.toggle("agent-full", full);
+  $("#mode-note").hidden = !full;
+  $("#composer-note").textContent = full
+    ? "Full Claude Code: reads, edits and runs commands in this folder without asking. Uses your Claude Code login."
+    : READONLY_NOTE;
+  for (const b of document.querySelectorAll("#mode button")) {
+    b.setAttribute("aria-checked", String(b.dataset.mode === agentMode));
+  }
+}
+function setMode(mode) {
+  if (mode === agentMode) return;
+  agentMode = mode;
+  try {
+    sessionStorage.setItem(MODE_KEY, mode);
+  } catch { /* applied, not remembered */ }
+  applyMode();
+  addMsg("tool", null, `mode → ${mode === "full" ? "full" : "read-only"} (from the next message; same conversation)`);
+}
+for (const b of document.querySelectorAll("#mode button")) b.onclick = () => setMode(b.dataset.mode);
+applyMode();
+
+// ---------- keeping the editor in step with what the agent changed ----------
+// The open file: reloaded in place when the buffer is clean, a Reload / Keep
+// mine banner when it has unsaved edits. The tree: re-fetched, folds kept.
+async function syncOpenFile() {
+  if (!current) return;
+  const p = current;
+  let disk;
+  try {
+    disk = await api.read(p);
+  } catch {
+    return; // deleted or unreadable: leave the buffer alone
+  }
+  if (p !== current || disk === view.state.doc.toString()) return;
+  if (dirty) {
+    $("#disk-banner").hidden = false;
+    clearTimeout(autoSaveTimer);
+    return;
+  }
+  replaceBuffer(disk);
+  setStatus("updated by agent");
+  setTimeout(() => { if ($("#status").textContent === "updated by agent") setStatus(""); }, 2500);
+}
+
+// Swap in the disk content without counting it as an edit, keeping the
+// cursor (clamped) and the scroll position.
+function replaceBuffer(content) {
+  const sel = view.state.selection.main;
+  const top = view.scrollDOM.scrollTop;
+  view.setState(EditorState.create({ doc: content, extensions: extensions() }));
+  const len = view.state.doc.length;
+  view.dispatch({ selection: { anchor: Math.min(sel.anchor, len), head: Math.min(sel.head, len) } });
+  view.scrollDOM.scrollTop = top;
+  markDirty(false);
+  $("#disk-banner").hidden = true;
+}
+
+$("#disk-reload").onclick = async () => {
+  try {
+    replaceBuffer(await api.read(current));
+    setStatus("reloaded from disk");
+  } catch {
+    setStatus(`could not read ${current}`);
+  }
+};
+$("#disk-keep").onclick = () => {
+  $("#disk-banner").hidden = true; // the next save writes yours over the agent's
+  scheduleAutoSave();
+};
+
+function relPath(p) {
+  const s = String(p || "");
+  if (workspaceRoot && s.startsWith(workspaceRoot + "/")) return s.slice(workspaceRoot.length + 1);
+  return s.replace(/^\.\//, "");
+}
+
+let treeTimer = null;
+function refreshWorkspace() {
+  clearTimeout(treeTimer);
+  treeTimer = setTimeout(async () => {
+    try {
+      const tree = await api.tree();
+      fileList = tree.filter((n) => !n.dir).map((n) => n.path);
+      renderTree(tree);
+    } catch { /* keep the old tree */ }
+    syncOpenFile();
+  }, 150);
+}
+
+// Tell the server which chat this folder is on (home's Recent list shows it),
+// once per session id, including the new id a fork gets. Fire-and-forget.
+const reportedSessions = new Set();
+function reportRecentSession(id) {
+  if (!id || reportedSessions.has(id)) return;
+  reportedSessions.add(id);
+  f("/api/recent", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ session: id }),
+  }).catch(() => {});
+}
+
+async function askAgent(prompt, images = []) {
   streaming = true;
   abortCtl = new AbortController();
   const selectedModel = $("#model").value || undefined;
   let sawSession = false;
-  recordAndAdd({ type: "user", text: prompt });
+  let sawError = false; // an error/ended/stopped line already explains a missing reply
+  let doneDetail = null;
+  let replyNote = false; // the bubble got a plain-text error instead of a reply
+  let stopped = false; // the stop button: queued messages go back to the composer
+  const runMode = agentMode; // a switch mid-run applies from the next message
+  const userEl = recordAndAdd({ type: "user", text: prompt, ...(images.length ? { images: images.length } : {}) });
+  if (images.length) addImageThumbs(userEl, images);
+  scrollChatToEnd(); // your own message always brings you to the bottom
   const reply = addMsg("assistant", "agent", "");
   let replyRaw = "";
   let thoughtBox = null, thoughtRaw = "";
@@ -791,16 +1425,21 @@ async function askAgent(prompt) {
       body: JSON.stringify({
         prompt,
         sessionId: agentSession,
+        fork: pendingFork && Boolean(agentSession),
         context,
         extraFiles,
         gitBranch,
         model: selectedModel,
+        mode: runMode,
+        ...(images.length ? { images: images.map(({ mediaType, data }) => ({ mediaType, data })) } : {}),
+        ...(resumeMode ? { resumed: { source: resumedSource } } : {}),
       }),
     });
     if (!r.ok || !r.body) {
       const err = await r.json().catch(() => ({}));
-      if (selectedModel === "fable") return markFableUnavailable();
+      if (selectedModel === "fable") { sawError = true; return markFableUnavailable(); }
       reply.appendChild(document.createTextNode(err.error || `agent error (${r.status})`));
+      replyNote = true;
       return;
     }
     const reader = r.body.getReader();
@@ -818,12 +1457,13 @@ async function askAgent(prompt) {
         const ev = JSON.parse(chunk.slice(6));
         if (ev.type === "session") {
           agentSession = ev.id;
+          pendingFork = false;
           sawSession = true;
+          reportRecentSession(ev.id);
         } else if (ev.type === "delta") {
           replyRaw += ev.text;
-          reply.textContent = replyRaw;
+          follow(() => { reply.textContent = replyRaw; });
           setPhase("writing…");
-          chatEl.scrollTop = chatEl.scrollHeight;
         } else if (ev.type === "thinking") {
           if (!thoughtBox) {
             thoughtBox = document.createElement("details");
@@ -832,7 +1472,7 @@ async function askAgent(prompt) {
             reply.parentNode.insertBefore(thoughtBox, reply);
           }
           thoughtRaw += ev.text;
-          thoughtBox.querySelector(".ttext").textContent = thoughtRaw;
+          follow(() => { thoughtBox.querySelector(".ttext").textContent = thoughtRaw; });
           setPhase("thinking…");
         } else if (ev.type === "phase") {
           setPhase(ev.phase === "thinking" ? "thinking…" : "writing…");
@@ -841,37 +1481,380 @@ async function askAgent(prompt) {
           recordAndAdd({ type: "tool", text: `⚙ ${ev.name}${ev.detail ? " " + ev.detail : ""}` });
         } else if (ev.type === "proposal") {
           recordAndAdd({ type: "proposal", path: ev.path, content: ev.content, note: ev.note });
+        } else if (ev.type === "file-changed") {
+          if (ev.outside) recordAndAdd({ type: "tool", text: `changed outside this folder: ${ev.path}` });
+          else if (relPath(ev.path) === current) syncOpenFile();
+          else refreshWorkspace(); // maybe a new file: the tree should show it
+        } else if (ev.type === "maybe-changed") {
+          refreshWorkspace();
+        } else if (ev.type === "question") {
+          questionCard(ev);
+        } else if (ev.type === "permission") {
+          askCard(ev);
+        } else if (ev.type === "tool-denied") {
+          recordAndAdd({ type: "tool", text: `blocked: ${ev.name}${ev.detail ? " — " + ev.detail : ""}` });
         } else if (ev.type === "error") {
+          sawError = true;
           if (selectedModel === "fable" && !sawSession) markFableUnavailable();
-          else recordAndAdd({ type: "tool", text: `error: ${ev.message}` });
+          else offerForkIfBusy(recordAndAdd({ type: "tool", text: `error: ${ev.message}` }));
+        } else if (ev.type === "done" && ev.ok && typeof ev.detail === "string") {
+          doneDetail = ev.detail;
         } else if (ev.type === "done" && !ev.ok) {
+          sawError = true;
           if (selectedModel === "fable" && !sawSession) markFableUnavailable();
-          else recordAndAdd({ type: "tool", text: `ended: ${ev.error}${ev.detail ? " — " + ev.detail : ""}` });
+          else offerForkIfBusy(recordAndAdd({ type: "tool", text: `ended: ${ev.error}${ev.detail ? " — " + ev.detail : ""}` }));
         }
       }
     }
   } catch (e) {
+    sawError = true;
+    if (e.name === "AbortError") stopped = true;
     if (e.name === "AbortError") recordAndAdd({ type: "tool", text: "stopped" });
     else recordAndAdd({ type: "tool", text: `agent unreachable: ${e.message}` });
   } finally {
     if (replyRaw) {
-      renderMd(reply, replyRaw);
+      follow(() => renderMd(reply, replyRaw));
       transcript.push({ type: "assistant", text: replyRaw });
+    } else if (!replyNote) {
+      // Never leave an empty agent bubble: say why there is no text, or drop
+      // it when an error line below already does.
+      if (sawError && !doneDetail) reply.remove();
+      else {
+        reply.classList.add("no-reply");
+        follow(() => reply.appendChild(document.createTextNode(doneDetail || "no reply")));
+      }
     }
     if (thoughtBox) {
       thoughtBox.querySelector("summary").textContent = "thought";
       transcript.push({ type: "thought", text: thoughtRaw });
     }
     if (replyRaw || thoughtBox) persistChat();
+    if (runMode === "full") refreshWorkspace(); // a full run may have changed anything
+    closeAskCards(); // a question left open when the run ended is moot
     setPhase(null);
     streaming = false;
     abortCtl = null;
+    drainQueue(stopped);
   }
+}
+
+// A resumed session that Claude Code is still running (a background session,
+// or one open in a terminal) cannot be resumed here; the CLI says so and
+// suggests --fork-session. Offer that as one click: a new window on a fork,
+// leaving the original alone. Matching the CLI's wording is a fallback only:
+// the home screen already disables Resume for sessions the server reports as
+// open, and this catches the ones it could not see (opened after the list
+// loaded, or not reported). If the wording changes, the button just doesn't
+// appear and the plain error remains.
+const BUSY_SESSION_RE = /running in the background|--fork-session/;
+// "running in the background (abcdef12)" names a background session; only
+// then is attaching an option (the `claude attach` command is background-only).
+const BACKGROUND_ID_RE = /running in the background \(([0-9a-f]{8})/;
+function offerForkIfBusy(msgEl) {
+  if (!resumeMode || !resumedId || !msgEl || !BUSY_SESSION_RE.test(msgEl.textContent)) return;
+  const bg = msgEl.textContent.match(BACKGROUND_ID_RE);
+  const row = document.createElement("div");
+  row.className = "fork-offer";
+  const note = document.createElement("span");
+  const offer = (label, title, url, body, done, failed) => {
+    const btn = document.createElement("button");
+    btn.textContent = label;
+    btn.title = title;
+    btn.onclick = async () => {
+      btn.disabled = true;
+      note.textContent = "opening…";
+      try {
+        const r = await f(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (r.ok && (data.ok || data.pending)) {
+          note.textContent = done;
+          return;
+        }
+        note.textContent = failed(r, data);
+      } catch {
+        note.textContent = "server not answering";
+      }
+      btn.disabled = false;
+    };
+    return btn;
+  };
+  const why = (r, data) => [data.error || r.status, data.hint].filter(Boolean).join(" — ");
+  row.appendChild(offer("Fork instead", "Open a new window on a copy of this session; the original is untouched",
+    "/api/open", { session: resumedId, fork: true }, "opening a fork in a new window…",
+    (r, data) => `couldn't fork: ${why(r, data)}`));
+  if (bg) {
+    row.appendChild(offer("Attach in Terminal", `Open the running session in Terminal (claude attach ${bg[1]})`,
+      "/api/session-action", { id: resumedId, action: "attach" }, "opening it in Terminal…",
+      (r, data) => r.status === 501
+        ? `Attach needs macOS Terminal — run \`claude attach ${bg[1]}\``
+        : `couldn't attach: ${why(r, data)}`));
+  }
+  row.appendChild(note);
+  msgEl.appendChild(row);
+}
+
+// ---------- slash commands: answered here, never sent to the agent ----------
+// "/name" at the start (a path like /Users/x/a.js is not one: the name must
+// end at a space or the end). fethr's agent is not Claude Code's REPL, so its
+// slash commands do nothing here; say so, and say where the real thing is.
+// ---------- permission questions (full mode): Approve / Deny ----------
+// Claude Code asks when auto mode's classifier can't decide. The run waits on
+// the server until one of these buttons answers (or stop denies it).
+function askCard(ev) {
+  const card = document.createElement("div");
+  card.className = "msg ask-card";
+  const q = document.createElement("div");
+  q.className = "ask-q";
+  q.textContent = `Claude Code asks to use ${ev.name}`;
+  const d = document.createElement("pre");
+  d.className = "ask-detail";
+  d.textContent = ev.detail || "";
+  const row = document.createElement("div");
+  row.className = "ask-btns";
+  const answer = async (allow) => {
+    for (const b of row.querySelectorAll("button")) b.disabled = true;
+    let ok = false;
+    try {
+      const r = await f("/api/agent/permission", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: ev.id, allow }),
+      });
+      ok = r.ok;
+    } catch { /* shown below */ }
+    row.replaceChildren();
+    const out = document.createElement("span");
+    out.className = "ask-result";
+    out.textContent = ok ? (allow ? "approved" : "denied") : "couldn't answer: the run already ended";
+    row.appendChild(out);
+    card.classList.add("answered");
+    if (ok) transcript.push({ type: "tool", text: `${allow ? "approved" : "denied"}: ${ev.name} ${ev.detail || ""}`.trim() });
+    setPhase("thinking…");
+  };
+  const yes = document.createElement("button");
+  yes.type = "button";
+  yes.className = "ask-yes";
+  yes.textContent = "Approve";
+  yes.onclick = () => answer(true);
+  const no = document.createElement("button");
+  no.type = "button";
+  no.className = "ask-no";
+  no.textContent = "Deny";
+  no.onclick = () => answer(false);
+  row.append(yes, no);
+  card.append(q, d, row);
+  follow(() => chatEl.appendChild(card));
+  setPhase("waiting for you…");
+}
+function closeAskCards() {
+  for (const card of chatEl.querySelectorAll(".ask-card:not(.answered)")) {
+    card.classList.add("answered");
+    const row = card.querySelector(".ask-btns");
+    row.replaceChildren();
+    const out = document.createElement("span");
+    out.className = "ask-result";
+    out.textContent = "not answered: the run ended";
+    row.appendChild(out);
+  }
+}
+
+// ---------- choice questions (Claude Code's AskUserQuestion) ----------
+// Each question shows its options; multi-select ones are checkboxes. "Other"
+// takes a typed answer instead. Send answers them all; Dismiss answers none.
+let questionSeq = 0;
+function questionCard(ev) {
+  const card = document.createElement("div");
+  card.className = "msg ask-card question-card";
+  const picks = []; // per question: () => answer string or ""
+  for (const q of ev.questions || []) {
+    const n = ++questionSeq;
+    const box = document.createElement("fieldset");
+    box.className = "q";
+    const legend = document.createElement("legend");
+    if (q.header) {
+      const chip = document.createElement("span");
+      chip.className = "q-chip";
+      chip.textContent = q.header;
+      legend.appendChild(chip);
+    }
+    legend.appendChild(document.createTextNode(q.question));
+    box.appendChild(legend);
+    const inputs = [];
+    for (const o of q.options || []) {
+      const lab = document.createElement("label");
+      lab.className = "q-opt";
+      const inp = document.createElement("input");
+      inp.type = q.multiSelect ? "checkbox" : "radio";
+      inp.name = `q${n}`;
+      inp.value = o.label;
+      const t = document.createElement("span");
+      t.className = "q-label";
+      t.textContent = o.label;
+      lab.append(inp, t);
+      if (o.description) {
+        const d = document.createElement("span");
+        d.className = "q-desc";
+        d.textContent = o.description;
+        lab.appendChild(d);
+      }
+      box.appendChild(lab);
+      inputs.push(inp);
+    }
+    const other = document.createElement("input");
+    other.type = "text";
+    other.className = "q-other";
+    other.placeholder = "Other: type your own answer";
+    other.addEventListener("input", () => { if (other.value && !q.multiSelect) inputs.forEach((i) => { i.checked = false; }); });
+    inputs.forEach((i) => i.addEventListener("change", () => { if (i.checked && !q.multiSelect) other.value = ""; }));
+    box.appendChild(other);
+    card.appendChild(box);
+    picks.push([q.question, () => {
+      const chosen = inputs.filter((i) => i.checked).map((i) => i.value);
+      if (other.value.trim()) chosen.push(other.value.trim());
+      return chosen.join(", ");
+    }]);
+  }
+  const row = document.createElement("div");
+  row.className = "ask-btns";
+  const answer = async (send) => {
+    const answers = {};
+    for (const [q, get] of picks) { const a = get(); if (a) answers[q] = a; }
+    if (send && !Object.keys(answers).length) return; // nothing picked yet
+    for (const el of card.querySelectorAll("button, input")) el.disabled = true;
+    let ok = false;
+    try {
+      const r = await f("/api/agent/permission", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: ev.id, allow: send, answers }),
+      });
+      ok = r.ok;
+    } catch { /* shown below */ }
+    row.replaceChildren();
+    const out = document.createElement("span");
+    out.className = "ask-result";
+    out.textContent = !ok ? "couldn't answer: the run already ended"
+      : send ? `answered: ${Object.values(answers).join(" · ")}` : "dismissed";
+    row.appendChild(out);
+    card.classList.add("answered");
+    if (ok) transcript.push({ type: "tool", text: send ? `answered: ${Object.entries(answers).map(([q, a]) => `${q} → ${a}`).join("; ")}` : "dismissed a question" });
+    setPhase("thinking…");
+  };
+  const yes = document.createElement("button");
+  yes.type = "button";
+  yes.className = "ask-yes";
+  yes.textContent = "Send";
+  yes.onclick = () => answer(true);
+  const no = document.createElement("button");
+  no.type = "button";
+  no.className = "ask-no";
+  no.textContent = "Dismiss";
+  no.onclick = () => answer(false);
+  row.append(yes, no);
+  card.appendChild(row);
+  follow(() => chatEl.appendChild(card));
+  setPhase("waiting for you…");
+}
+
+// ---------- queue: messages sent while the agent is working ----------
+// Like Claude Code in a terminal: they wait above the composer and go out one
+// at a time as each run ends. Stop puts them back in the composer unsent.
+let queued = []; // { text, images }
+const queueEl = $("#queue");
+function renderQueue() {
+  queueEl.replaceChildren();
+  queueEl.hidden = !queued.length;
+  queued.forEach((q, i) => {
+    const row = document.createElement("div");
+    row.className = "queued";
+    const label = document.createElement("b");
+    label.textContent = "queued";
+    const t = document.createElement("span");
+    const n = q.images.length;
+    t.textContent = (n ? (n === 1 ? "[1 image] " : `[${n} images] `) : "") + q.text;
+    t.title = q.text;
+    const x = document.createElement("button");
+    x.type = "button";
+    x.textContent = "×";
+    x.title = "Don't send";
+    x.onclick = () => { queued.splice(i, 1); renderQueue(); };
+    row.append(label, t, x);
+    queueEl.appendChild(row);
+  });
+}
+function drainQueue(stopped) {
+  if (!queued.length) return;
+  if (stopped) {
+    inputEl.value = [...queued.map((q) => q.text), inputEl.value].filter(Boolean).join("\n\n");
+    pendingImages = [...queued.flatMap((q) => q.images), ...pendingImages].slice(0, MAX_IMAGES);
+    queued = [];
+    renderQueue();
+    renderCtxBar();
+    return;
+  }
+  const next = queued.shift();
+  renderQueue();
+  setTimeout(() => askAgent(next.text || "(see the attached image)", next.images), 0);
+}
+
+const SLASH_RE = /^\/([a-z][\w:-]*)(\s|$)/i;
+function terminalHint() {
+  const id = agentSession || resumedId;
+  // The full id: per `claude --help`, --resume takes a session ID, and
+  // anything else opens its picker as a search term.
+  if (!id) return "For full Claude Code, run `claude` in a terminal in this folder.";
+  return `For full Claude Code, run \`claude --resume ${id}${pendingFork ? " --fork-session" : ""}\` in a terminal.`;
+}
+function localCard(lines) {
+  const d = document.createElement("div");
+  d.className = "msg local-card";
+  for (const [tag, text] of lines) {
+    const n = document.createElement(tag);
+    n.textContent = text;
+    d.appendChild(n);
+  }
+  follow(() => chatEl.appendChild(d));
+  return d;
+}
+function slashCommand(text) {
+  const name = text.match(SLASH_RE)[1].toLowerCase();
+  addMsg("user", "you", text); // shown, not sent, not saved
+  if (name === "permissions" || name === "tools") {
+    // The card describes the mode the next message will run in.
+    const card = agentMode === "full" ? localCard([
+      ["b", "Full mode: Claude Code's tools, without asking"],
+      ["li", "Read, search, edit and write files; run commands; fetch from the web; start subagents"],
+      ["li", "Claude Code's auto mode decides: a classifier can block risky actions, and you'll see a \"blocked\" line when it does"],
+      ["li", "Your Claude Code settings, hooks and CLAUDE.md files apply, as in a terminal"],
+      ["p", "Switch to read-only in the agent header to go back to proposals only."],
+    ]) : localCard([
+      ["b", "What fethr's agent can do"],
+      ["li", "Read files in this folder"],
+      ["li", "Search them (Grep, Glob)"],
+      ["li", "Propose an edit — you review and accept it in the editor; nothing is written until you save"],
+      ["b", "Turned off by design"],
+      ["li", "Bash (running commands)"],
+      ["li", "Write / Edit (changing files directly)"],
+      ["li", "Web fetch and search"],
+      ["li", "Subagents"],
+      ["p", "Switch to full (top of this panel) to give the agent Claude Code's tools here, in this same conversation."],
+    ]);
+    card.dataset.cmd = name;
+    return;
+  }
+  localCard([
+    ["p", `/${name}: Claude Code's slash commands aren't available in fethr's panel.`],
+    ["p", terminalHint()],
+  ]).dataset.cmd = name;
 }
 
 inputEl.addEventListener("keydown", (e) => {
   if (mentionMenu.classList.contains("open")) {
-    if (e.key === "Escape") {
+    if (e.key === "Escape" && claimEsc(e)) {
       hideMentionMenu();
       e.preventDefault();
       return;
@@ -891,9 +1874,20 @@ inputEl.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
     const t = inputEl.value.trim();
-    if (!t || streaming) return;
+    if (!t && !pendingImages.length) return;
+    if (t && SLASH_RE.test(t) && !pendingImages.length) {
+      inputEl.value = "";
+      return slashCommand(t); // local, so it answers even mid-run
+    }
     inputEl.value = "";
-    askAgent(t);
+    const imgs = pendingImages;
+    pendingImages = [];
+    renderCtxBar();
+    if (streaming) {
+      queued.push({ text: t, images: imgs });
+      return renderQueue();
+    }
+    askAgent(t || "(see the attached image)", imgs);
   }
 });
 
@@ -904,21 +1898,37 @@ f("/api/alive", { method: "POST" }).catch(() => {});
 
 boot();
 
+// ---- home button: back to (or open) the home window ----
+$("#go-home").onclick = async () => {
+  try {
+    const r = await f("/api/open", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ home: true }),
+    });
+    const data = await r.json().catch(() => ({}));
+    setStatus(r.ok && data.ok ? "opening home…" : `couldn't open home: ${data.error || r.status}`);
+  } catch {
+    setStatus("couldn't open home: server not answering");
+  }
+  setTimeout(() => setStatus(""), 3000);
+};
+
 // ---- update check (web/update.js) ----
 // Off switch in the footer; the daily fetch is the editor's only network
 // call on its own. The notice names the version and links to where it is.
 try {
-  $("#updatecheck").checked = isEnabled(localStorage);
+  $("#updatecheck").checked = isEnabled(prefs);
 } catch { /* ignore */ }
 $("#updatecheck").onchange = () => {
   try {
-    localStorage.setItem(ENABLED_KEY, $("#updatecheck").checked ? "1" : "0");
+    prefs.setItem(ENABLED_KEY, $("#updatecheck").checked ? "1" : "0");
   } catch { /* ignore */ }
 };
 
 async function checkForUpdate(meta) {
-  if (!meta.version || !isEnabled(localStorage)) return;
-  const manifest = await fetchManifest(localStorage);
+  if (!meta.version || !isEnabled(prefs)) return;
+  const manifest = await fetchManifest(prefs);
   if (!manifest) return;
   const state = decide(manifest, meta.version, meta.channel);
   if (state.kind === "current") return;
@@ -958,7 +1968,7 @@ async function checkForUpdate(meta) {
     row.append(sw, text);
     row.onclick = () => {
       themeId = t.id;
-      saveTheme(localStorage, themeId);
+      saveTheme(prefs, themeId);
       applyTheme();
       closeViewMenu();
     };
@@ -981,6 +1991,6 @@ async function checkForUpdate(meta) {
     if (menu.classList.contains("open") && !menu.contains(e.target)) closeViewMenu();
   });
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && menu.classList.contains("open")) { closeViewMenu(); $("#toggle-view").focus(); }
+    if (e.key === "Escape" && menu.classList.contains("open") && claimEsc(e)) { closeViewMenu(); $("#toggle-view").focus(); }
   });
 }

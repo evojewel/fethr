@@ -35,13 +35,22 @@ push the difference into how the window gets its URL, not into the page's own JS
    Terminal. A `$SHELL -l -c "node ..."` wrapper was tried first and discarded — it can
    hang indefinitely if anything in the user's shell profile is slow or interactive
    (nvm lazy-load, prompt frameworks, update checks), with no useful error.
+   **The agent's PATH is a separate problem, solved differently** (2026-10-17,
+   `src/shell-env.js`). The sidecar inherits the same bare PATH and passes it to the
+   agent, so its shell commands couldn't find npm or Homebrew tools and node-based MCP
+   servers failed to start. Finding node is a startup-blocking question; the agent's PATH
+   isn't. So the sidecar asks the login shell once, in the background
+   (`$SHELL -ilc`, output read between markers), with a hard 4 s timeout and a SIGKILL,
+   falling back to the usual tool dirs. Only the first agent request waits for it. That
+   timeout is what the discarded wrapper lacked. Measured on a real profile: 0.4 s.
 2. Spawns `node bin/fethr.js <root> --sidecar` from `Resources/sidecar/` (staged by
    `scripts/stage-sidecar.sh`, run as part of `beforeBuildCommand`) and reads a single
    `FETHR_URL=...` line from its stdout.
 3. Creates the native window pointed at that URL.
-4. Kills the child on window close (matched against `window.label() == "main"` — an
-   earlier version killed on *any* window-destroy event, which is wrong if the app ever
-   grows a second window).
+4. Kills that window's own child on window close. Children are kept in a map keyed by
+   window label, since the app has more than one window (see "Home screen and windows"
+   below). An earlier version killed on *any* window-destroy event, then only on
+   `label == "main"`; both stopped being right once there was a second window.
 
 **Why the sidecar is only ~43MB staged, not ~360MB:** `@anthropic-ai/claude-agent-sdk`
 ships a full copy of the `claude` binary as a platform-specific `optionalDependency`
@@ -62,6 +71,31 @@ request. Caught by piping the child's `stderr` to a log file instead of `Stdio::
 — an earlier version had it discarded, which hid the actual crash reason for several
 debugging iterations before that was noticed.
 
+## Home screen and windows
+
+Launching with no folder opens a **home** window: recent folders on one side, and on the
+other every Claude Code session on the machine, read from `~/.claude/projects`
+(`src/sessions.js`), with **Resume** and **Fork** on each row. The full contract is in
+[`plans/home-screen.md`](plans/home-screen.md). The parts worth knowing:
+
+- **One sidecar per window.** A server's root never changes, and each window gets its own
+  token and URL. The page asks to open something with `POST /api/open`; the server resolves
+  it and calls `opts.onOpen`. In sidecar mode that prints a `FETHR_OPEN=<json>` line, which
+  the Rust shell reads from the same stdout as `FETHR_URL=`. In CLI mode it spawns a detached
+  `fethr` process. The page doesn't branch on which one is running.
+- **A session opens in the folder it was recorded in**, and the server, not the page, decides
+  which folder that is. The SDK resumes with `cwd: root`, so any other folder would give the
+  agent the wrong workspace. `bin/fethr.js` refuses a hand-typed `--session` whose folder
+  doesn't match.
+- **Fork** passes `forkSession` on the first agent request only, so the original transcript is
+  never appended to. The page keeps the fork pending until the SDK's init event delivers the
+  new id, so a first request that fails can't fall back to writing into the original.
+- **The transcript format is internal to Claude Code.** Every field `src/sessions.js` reads is
+  optional, a bad file drops one row, the list reads only a 256 KB window at each end of a file,
+  and history refuses files over 50 MB (the session can still be resumed).
+- **Transcript text is untrusted.** It reaches the page only through `textContent` or the escaped
+  `renderMd`.
+
 ## DMG packaging without Finder automation
 
 Tauri's built-in DMG bundler drives Finder via AppleScript to lay out icons prettily. That
@@ -81,7 +115,21 @@ literally damaged, just unsealed.
 
 ## Safety model (agent panel)
 
-Same tier-thinking as this author's other CLI, `gigback`: the agent can **read** the
+The panel has two modes, chosen per window in its header. **Read-only is the default in
+every window**, and is what the rest of this section describes. **Full** (added 2026-10-17)
+removes the tool restrictions and runs the agent in Claude Code's `auto` permission mode:
+tools run without asking, and Claude Code's classifier may block risky actions, which the
+panel shows as "blocked" lines. When auto mode can't decide, Claude Code asks; fethr shows the
+question as an Approve / Deny card (`askInPanel` in `src/agent.js`, answered through
+`POST /api/agent/permission`) and the run waits. Stop, or the window closing, denies. Full mode never uses `bypassPermissions`, and it leaves
+`settingSources` unset, so the user's own Claude Code settings, hooks and CLAUDE.md files
+apply as they do in a terminal. Files the agent writes are reloaded into a clean buffer; a
+dirty buffer gets a Reload / Keep mine banner instead. Every request carries a
+`<fethr_context>` block that names the mode and its tools, derived from the same option
+objects passed to the SDK (`MODE_OPTIONS` in `src/agent.js`), so a resumed conversation can't
+assume tools it doesn't have.
+
+Read-only uses the same tier-thinking as this author's other CLI, `gigback`: the agent can **read** the
 workspace (`Read`/`Grep`/`Glob` only — every mutating built-in tool, including `Bash`, is
 in `disallowedTools`) and its *only* path to a file change is the `propose_edit` MCP tool,
 which just emits an SSE event — nothing is written to disk by the tool call itself. The
@@ -131,9 +179,11 @@ explicitly on open/close) and leaving the CSS classes to control only what they 
 bin/fethr.js          CLI entry point (also the sidecar entry point, via --sidecar)
 src/server.js          the one server — file API, chat persistence, static serving
 src/agent.js            Agent SDK integration — tools, safety, context assembly
-web/*.js, web/*.html    frontend source (bundled by esbuild into dist/)
+src/sessions.js         Claude Code sessions (~/.claude/projects) and recent folders (~/.fethr/recent.json)
+web/*.js, web/*.html    frontend source (bundled by esbuild into dist/); web/home.js is the home view
 src-tauri/              native app shell (Rust) — spawns the sidecar, owns the window
 scripts/stage-sidecar.sh   builds src-tauri/sidecar/ (gitignored) before `tauri build`
+test-ui/home.cjs           the same for the home view, resume and fork
 test-ui/agent-panel.cjs    real-browser (puppeteer) regression suite — not run in CI
                            (no Chrome on the shellcheck/build runners); run locally
                            before any release touching web/ or src/agent.js

@@ -23,6 +23,47 @@
 - [ ] **`.fethr/chat.json` leaks into repos** that have no ignore rule. Write a `.fethr/.gitignore`
       containing `*` on first save.
 
+- [ ] **Home screen: known gaps** *(2026-10-17, see `docs/plans/home-screen.md`)*. Two windows on the
+      same folder share `.fethr/chat.json`, and the last write wins. Resume of a `live` session is
+      allowed, only discouraged. The home view doesn't show the update notice. The real macOS folder
+      picker (`osascript` in CLI mode, the dialog plugin in the app) has only been tested through mocks.
+- [ ] **A local `tauri build` ships a stale sidecar.** ARCHITECTURE says `stage-sidecar.sh` runs in
+      `beforeBuildCommand`, but `tauri.conf.json` runs only `npm run build`; only the CI workflows run
+      the staging step. On 2026-10-17 a local build bundled the 2026-10-02 server. Either chain it into
+      `beforeBuildCommand` or correct the doc.
+- [x] **Full-capability mode** *(decided and built 2026-10-17)*. A per-window "full" mode runs
+      Claude Code's `auto` permission mode with no prompts; read-only stays the default. See
+      ARCHITECTURE "Safety model". Denials are detected by matching error text, so an ordinary
+      failure that says "permission" also shows as "blocked".
+- [ ] **Read-only can't propose edits outside its folder.** A session resumed in folder A that is
+      about files in folder B can only describe the change: `propose_edit` and `/api/file` refuse
+      paths outside the root. Found 2026-10-17 resuming a session recorded in one repo about
+      another. Options: say so in `<fethr_context>`, or offer "open folder B" from the refusal.
+- [ ] **Building fethr.app from inside fethr is blocked by macOS.** A full-mode agent's `tauri build`
+      runs as fethr's child, so App Management sees "fethr" modifying an app and blocks it (seen
+      2026-10-17; the bundle was left with a broken signature seal). Build from Terminal, or re-sign
+      after with `codesign --force --deep -s - <app>`. Granting fethr App Management would work but
+      lets any full-mode agent modify any app; not recommended.
+- [x] **Agent shells get the bare macOS PATH** *(fixed 2026-10-17)*. The sidecar now reads the
+      login shell's PATH once, in the background, with a 4 s timeout and fallback dirs
+      (`src/shell-env.js`, ARCHITECTURE "The sidecar"). Verified in a bare launchd-style env: the
+      agent's shell found npm, nvm node and claude.
+- [x] **Full mode refused some Bash calls as "requires approval"** *(fixed 2026-10-17)*. Cause:
+      auto mode asked a permission question and fethr had nothing to answer it with. Full mode
+      now passes the question to the panel as an Approve / Deny card (SDK `canUseTool`); the
+      run waits, and stop denies. Reproduced with the same command and checked on a real run.
+      An "allow everything" answer was tried first and refused by the auto-mode classifier as
+      creating an unsafe agent; don't reintroduce it.
+- [ ] **Claude Code's terminal UI doesn't exist in the panel.** Mods, plugin panes, hot reload and
+      slash commands need Claude Code's own terminal interface; fethr runs it through the SDK. On
+      2026-10-17 a full-mode agent built a mod in the panel, then looped launching `claude
+      --plugin-dir` from Bash trying to load it. The context block now tells the agent not to;
+      showing a mod's pane in fethr would be a feature of its own.
+- [ ] **New windows open in read-only.** Asked for full by default on 2026-10-17; the classifier
+      refused that change. Needs the owner to make it, or a permission rule allowing it.
+- [ ] **Not yet run against a real agent:** full mode, Attach / Move here, and the native folder
+      picker have been tested only with stubs. Run each once in the app before release.
+
 ## Next
 
 - [x] **Windows installer** *(2026-10-02, unreleased)* — `build-windows.yml` builds the NSIS

@@ -4,6 +4,51 @@ All notable changes to fethr are documented here. Dates are when each version wa
 
 ## Unreleased
 
+**A home screen, and more than one window.** Opening the app with no folder now shows recent
+folders and every Claude Code session on the machine: sessions from the CLI, the VS Code/Cursor
+extension and fethr itself, newest first and searchable. **Resume** continues a session in the
+folder it was recorded in. **Fork** starts a new session from it and leaves the original transcript
+untouched. Sessions changed in the last two minutes are marked `live` and default to Fork, since
+they may still be open somewhere else. Each folder or session opens in its own window with its own
+server, and the status bar has a **home** button. `fethr --home` opens the same page from the CLI.
+Rows show each session's state (busy, open, background, recent), its age, its short id and its
+subagents, refreshed every few seconds; a session continued elsewhere is shown once.
+
+**Agent-only windows and full mode.** A resumed session opens as just the conversation, in a
+reading column with a list of your turns beside it on wide windows; **files** (⌘E) brings the
+editor back, and focus mode (⌘⇧F) hides everything else. The agent panel gains a per-window
+**read-only | full** switch. Read-only, the default, is unchanged. Full runs Claude Code's own
+auto mode: tools run without asking, a classifier can block risky actions, and your Claude Code
+settings and hooks apply. Files the agent changes reload in the editor. The old "auto" checkbox
+is now "auto-apply". Opening a session whose folder is your home folder asks first.
+
+**Images in the agent panel.** Paste or drop PNG, JPEG, GIF or WebP images into the composer.
+They show as thumbnails you can remove, go with your next message as image blocks, and appear
+in the sent message. Images larger than 1568px on the long edge are scaled down first; up to six
+per message, 5 MB each. Saved chats keep only "[2 images]", never the image data.
+
+**Queued messages.** Enter while the agent is working queues the message above the composer (×
+drops it); queued messages go out one at a time as each run ends. Stop puts them back in the
+composer unsent. Consecutive tool steps fold into one row with short paths, and the status bar
+stays on one line in narrow windows.
+
+**Copy code.** Every code block in a reply has a copy button in its corner, faint until hovered;
+it copies the block's original text and shows ✓. If the clipboard is refused, the block is
+selected for ⌘C instead.
+
+**Approve / Deny in full mode.** When Claude Code asks permission for a command, the panel shows
+the command with Approve and Deny, and the run waits for your answer. Before, those commands
+failed as "requires approval". The auto-mode classifier's outright blocks still apply.
+
+**Choice questions.** When the agent asks you to pick between options, the panel shows the
+options (radios, or checkboxes for multi-select), an Other field for your own answer, and Send /
+Dismiss; your choice goes back to the agent. Before, these showed as an Approve / Deny card with
+raw JSON and no way to choose. Works in read-only too; asking you something is harmless.
+
+**Fixes.** Preferences (theme, widths, auto-save) now survive a relaunch: they were kept per
+origin, and the random port made every launch a new one. Read-only mode now also blocks
+subagents under their current tool name. Replies render headings, lists and quotes.
+
 **Windows.** The native shell and its server run there, proven on a real Windows runner by
 `build-windows.yml`: the NSIS installer (5.6 MB) installs silently, the app launches on a folder,
 finds node on PATH, starts the sidecar without a console window, serves the page, refuses `/api`
@@ -41,7 +86,7 @@ only outside sidecar mode; the app kills its child on window close, as it alread
 Moss (the dark the editor shipped with), Paper (the website's surface), Slate (cooler dark) and
 Dawn (warm light). Colours are CSS keyed off `<html data-theme>` (`web/theme.js` holds the list);
 CodeMirror swaps between oneDark and its default light highlighting to match. The choice persists
-locally. Adapted from skript's View menu, cut to one axis.
+locally. One axis: the theme.
 
 **Fix: every agent run failed with `error_during_execution … result_type=user` on current Claude
 Code.** `src/agent.js` interrupted the query on the *request*'s `close` event, which Node has
